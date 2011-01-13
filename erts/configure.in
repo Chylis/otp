@@ -1869,6 +1869,27 @@ AC_SEARCH_LIBS(fdatasync, [rt])
 AC_CHECK_HEADERS(net/if_dl.h ifaddrs.h netpacket/packet.h)
 AC_CHECK_FUNCS([getifaddrs])
 
+case $host_os in
+	linux*|freebsd*|dragonfly*|darwin*)
+		AC_CHECK_FUNCS([sendfile])
+		;;
+	solaris*)
+		AC_SEARCH_LIBS(sendfile, sendfile, AC_DEFINE(HAVE_SENDFILE, 1))
+
+		if test $ac_cv_search_sendfile = "-lsendfile"; then
+			dnl does AC_SEARCH_LIBS(fdatasync) above add to LIBS?
+			dnl FIXME we shouldn't change saved_libs here :(
+			saved_libs="$saved_libs $ac_cv_search_sendfile"
+		fi
+		;;
+	win32)
+		dnl FIXME we shouldn't change saved_libs here :(
+		saved_libs="$saved_libs -lmswsock"
+		;;
+	*)
+		;;
+esac
+
 dnl ----------------------------------------------------------------------
 dnl Checks for features/quirks in the system that affects Erlang.
 dnl ----------------------------------------------------------------------
