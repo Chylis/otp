@@ -4,7 +4,7 @@
 
 -export([start_link/3]).
 %% wx_object callbacks
--export([init/1, handle_info/2, terminate/2]).
+-export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3, handle_event/2]).
 
 -include_lib("wx/include/wx.hrl").
 -include("observer_defs.hrl").
@@ -33,7 +33,7 @@ init([Notebook, SysPanel]) ->
     SysRightMemSizer = wxBoxSizer:new(?wxVERTICAL),
     
     wxSizer:add(SysSizer, SysNodeSizer, [{flag, ?wxEXPAND}]),
-    wxSizer:add(SysSizer, SysLoadSizer),%, [{flag, ?wxEXPAND}]),
+    wxSizer:add(SysSizer, SysLoadSizer, [{flag, ?wxEXPAND}]),
     wxSizer:add(SysSizer, SysMemSizer, [{flag, ?wxEXPAND}]),
     wxSizer:add(SysLoadSizer, SysLeftLoadSizer),
     wxSizer:add(SysLoadSizer, SysMidLoadSizer),
@@ -46,7 +46,7 @@ init([Notebook, SysPanel]) ->
     wxSizer:addSpacer(SysMidLoadSizer, 90),
     wxSizer:addSpacer(SysMidMemSizer, 70),
     
-    %%Create labels
+    %% Create labels
     NodeInfo = get_syspage_info(),
     create_info_label(SysPanel, SysNodeSizer, ?OBS_SYS_LOGIC:node_name_str(NodeInfo)),
     
@@ -94,7 +94,7 @@ init([Notebook, SysPanel]) ->
     
     
     wxPanel:setSizer(SysPanel, SysSizer),
-    erlang:send_after(1000, self(), {update, Notebook}),
+    erlang:send_after(3000, self(), {update, Notebook}),
     {SysPanel, SysPanelState}.
 
 get_syspage_info() ->
@@ -154,7 +154,7 @@ update_info_label(#obj{name = Name, ref = WxText}, NodeInfo) ->
 
 handle_info({update, Notebook}, State) ->
     update_syspage(Notebook, State),
-    erlang:send_after(1000, self(), {update, Notebook}),
+    erlang:send_after(3000, self(), {update, Notebook}),
     {noreply, State};
 
 handle_info(Info, State) ->
@@ -164,3 +164,14 @@ handle_info(Info, State) ->
 terminate(Reason, _State) ->
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
     ok.
+
+code_change(_, _, State) ->
+    {stop, not_yet_implemented, State}.
+
+handle_call(Msg, _From, State) ->
+    io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
+    {reply, ok, State}.
+
+handle_event(Event, State) ->
+    io:format("handle event ~p\n", [Event]),
+    {noreply, State}.

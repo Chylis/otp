@@ -4,18 +4,18 @@
 
 -compile(export_all).
 %% Client API
--export([start_link/0]).
+-export([start/0]).
 
 %% wx_object callbacks
--export([init/1, handle_event/2, handle_cast/2, terminate/2]).
+-export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, handle_call/3, handle_info/2]).
 
 -include_lib("wx/include/wx.hrl").
 -include("observer_defs.hrl").
 -include("erltop_defs.hrl").
 	 
 
-start_link() ->
-    wx_object:start_link(?MODULE, [], []).
+start() ->
+    wx_object:start(?MODULE, [], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -61,8 +61,6 @@ setup(#state{ref = Frame} = State) ->
     wxSizer:add(MainSizer, Notebook, [{proportion, 1}, {flag, ?wxEXPAND}]),
     wxPanel:setSizer(Panel, MainSizer),
     
-    Sel = wxNotebook:changeSelection(Notebook, 0),
-    io:format("SEL: ~w\n", [Sel]),
     wxNotebook:connect(Notebook, command_notebook_page_changed),
     wxFrame:connect(Frame, close_window),
     
@@ -100,11 +98,19 @@ handle_event(#wx{event = #wxClose{}}, State) ->
     {stop, normal, State};
 
 handle_event(Event, State) ->
-    io:format("handle event stop ~p\n", [Event]),
+    io:format("handle event ~p\n", [Event]),
     {noreply, State}.
 
 handle_cast(Cast, State) ->
     io:format("~p:~p: Got cast ~p~n", [?MODULE, ?LINE, Cast]),
+    {noreply, State}.
+
+handle_call(Msg, _From, State) ->
+    io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
+    {reply, ok, State}.
+
+handle_info(Info, State) ->
+    io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
 
 terminate(Reason, _State) ->
@@ -112,8 +118,11 @@ terminate(Reason, _State) ->
     wx:destroy(),
     ok.
 
+code_change(_, _, State) ->
+    {stop, not_yet_implemented, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),
     wxNotebook:getPageText(Notebook, Selection).
