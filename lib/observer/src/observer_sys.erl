@@ -1,0 +1,100 @@
+-module(observer_sys).
+
+-include("observer_defs.hrl").
+
+-export([node_info/0, node_name_str/1, no_procs_str/1, no_cpu_str/1, no_cpu_available_str/1,
+	no_cpu_online_str/1, tot_alloc_str/1, proc_used_str/1, proc_alloc_str/1,
+	atom_used_str/1, atom_alloc_str/1, binary_alloc_str/1, code_alloc_str/1, ets_alloc_str/1]).
+
+node_info() ->
+    #node_info{node_name = node_name(),
+	       no_procs = process_count(),
+	       no_cpu = logical_cpus(),
+	       no_cpu_available = logical_cpus_available(),
+	       no_cpu_online = logical_cpus_online(),
+	       tot_alloc = total_alloc(),
+	       proc_used = processes_used(),
+	       proc_alloc = processes_alloc(),
+	       atom_used = atom_used(),
+	       atom_alloc = atom_alloc(),
+	       binary_alloc = binary_alloc(),
+	       code_alloc = code_alloc(),
+	       ets_alloc = ets_alloc()
+	       }.
+
+%%%%%%%%%%%%%%%%%%%%%%% internal functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+node_name() ->
+    node().
+
+process_count() ->
+    erlang:system_info(process_count).
+
+logical_cpus() ->
+    erlang:system_info(logical_processors). % detected number of logical cpus configured on system
+
+logical_cpus_available() -> % detected number of logical cpus available to erlang runtime system
+    erlang:system_info(logical_processors_available).
+
+logical_cpus_online() -> % detected number of logical cpus online on system
+    erlang:system_info(logical_processors_online).
+
+total_alloc() ->
+    erlang:memory(total). % total amount of memory currently allocated
+
+processes_used() -> % amount of memory currently used by the erlang processes
+    erlang:memory(processes_used).
+
+processes_alloc() -> % allocated by erlang processes
+    erlang:memory(processes).
+
+atom_used() ->  % amount of memory used for atoms
+    erlang:memory(atom_used).
+
+atom_alloc() -> % amount allocated for atoms
+    erlang:memory(atom).
+
+binary_alloc() -> % amount allocated for binaries
+    erlang:memory(binary).
+
+code_alloc() -> % amount allocated for code
+    erlang:memory(code).
+
+ets_alloc() -> % amount allocated for ets tables
+    erlang:memory(ets).
+
+
+%% formatting functions, from the record-value to string
+node_name_str(#node_info{node_name = ToReturn}) ->
+    erlang:atom_to_list(ToReturn).
+no_procs_str(#node_info{no_procs = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+no_cpu_str(#node_info{no_cpu = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+no_cpu_available_str(#node_info{no_cpu_available = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+no_cpu_online_str(#node_info{no_cpu_online = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+tot_alloc_str(#node_info{tot_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						% erlang:integer_to_list((ToReturn div 1024) div 1024).
+proc_used_str(#node_info{proc_used = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+proc_alloc_str(#node_info{proc_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%   erlang:integer_to_list((ToReturn div 1024) div 1024).
+atom_used_str(#node_info{atom_used = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+atom_alloc_str(#node_info{atom_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%   erlang:integer_to_list((ToReturn div 1024) div 1024).
+binary_alloc_str(#node_info{binary_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+code_alloc_str(#node_info{code_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+ets_alloc_str(#node_info{ets_alloc = ToReturn}) ->
+    erlang:integer_to_list(ToReturn).
+						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
