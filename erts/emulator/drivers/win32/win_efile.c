@@ -1584,18 +1584,22 @@ int
 efile_sendfile(Efile_error* errInfo, int in_fd, int out_fd,
 	       off_t *offset, size_t *count)
 {
-    int res = efile_seek(errInfo, in_fd, *offset, EFILE_SEEK_SET, NULL);
-    if (res) {
-	/* TODO: could in_fd be shared and require protecting/locking
-	   efile_seek/SetFilePointerEx? */
-	if (TransmitFile((SOCKET) out_fd, (HANDLE) in_fd, *count,
-			 0, NULL, NULL, 0)) {
-	    return check_error(0, errInfo);
-	} else {
-	    /* TODO: correct error handling? */
-	    return set_error(errInfo);
-	}
-    } else {
-	return res;
-    }
+    /* TODO: write proper Windows TransmitFile based implementation */
+    /*       use overlapped I/O and driver_select on the structure? */
+    /* int res = efile_seek(errInfo, in_fd, *offset, EFILE_SEEK_SET, NULL); */
+    /* if (res) { */
+    /* 	/\* TODO: could in_fd be shared and require protecting/locking */
+    /* 	   efile_seek/SetFilePointerEx? *\/ */
+    /* 	if (TransmitFile((SOCKET) out_fd, (HANDLE) in_fd, *count, */
+    /* 			 0, NULL, NULL, 0)) { */
+    /* 	    return check_error(0, errInfo); */
+    /* 	} else { */
+    /* 	    /\* TODO: correct error handling? *\/ */
+    /* 	    return set_error(errInfo); */
+    /* 	} */
+    /* } else { */
+    /* 	return res; */
+    /* } */
+    errno = ENOTSUP;
+    return check_error(-1, errInfo);
 }

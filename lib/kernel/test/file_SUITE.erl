@@ -3962,7 +3962,8 @@ sendfile_supported({unix,sunos}) -> true;
 sendfile_supported({unix,freebsd}) -> true;
 sendfile_supported({unix,dragonfly}) -> true;
 sendfile_supported({unix,darwin}) -> true;
-sendfile_supported({win32,_}) -> true;
+%% TODO: enable win32 once TransmitFile based implemenation written properly
+%% sendfile_supported({win32,_}) -> true;
 sendfile_supported(_) -> false.
 
 sendfile(Config) when is_list(Config) ->

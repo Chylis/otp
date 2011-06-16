@@ -2314,6 +2314,7 @@ file_async_ready(ErlDrvData e, ErlDrvThreadData data)
 	  free_preadv(data);
 	  break;
       case FILE_SENDFILE:
+	  /* Return 'ok' and let prim_file:sendfile wait for message */
 	  reply_ok(desc);
 	  driver_select(desc->port, (ErlDrvEvent)desc->sendfile.out_fd,
 			ERL_DRV_USE|ERL_DRV_WRITE, 1);
