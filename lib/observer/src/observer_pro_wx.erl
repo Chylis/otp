@@ -22,11 +22,10 @@
 -define(ID_VIEW, 1).
 -define(ID_PROC, 2).
 -define(ID_DUMP_TO_FILE, 4).
--define(ID_QUIT, 5).
 -define(ID_ACCUMULATE, 6).
 -define(ID_TRACE, 8).
 -define(ID_OPTIONS, 9).
--define(ID_SAVE_OPT, 10).
+
 -define(ID_MODULE_INFO, 12).
 -define(OK, 11).
 -define(MAX_PROCINFO_TEXT_LENGTH, 35).
@@ -390,6 +389,17 @@ pro_refresh() ->
 pro_change_node(Node) ->
     wx_object:call(self(), {pro_change_node, Node}).
 
+pro_dump_to_file() -> %här eller i logikdel????
+    wx_object:call(self(), dump_to_file).
+
+pro_view_trace_options() ->
+    wx_object:call(self(), view_trace_options).
+
+pro_save_options() ->
+    wx_object:call(self(), save_options).
+
+
+    
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -439,6 +449,35 @@ code_change(_, _, State) ->
     {stop, not_yet_implemented, State}.
 
 
+
+handle_call(dump_to_file, _From, {Config, Info, State}) ->
+    FD  =  wxFileDialog:new(State#pro_wx_state.frame, [{style,?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
+    case wxFileDialog:showModal(FD) of
+	?wxID_OK ->
+	    Path = wxFileDialog:getPath(FD),
+	    io:format("It should Dump to file ~p~n", [Path]);
+	_ -> ok
+    end,
+    {reply, ok, {Config, Info, State}};
+
+handle_call(view_trace_options, _From, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+    case State#pro_wx_state.options_pid of
+	undefined ->
+	    Pid = erltop_options:start(Options,
+				       State#pro_wx_state.process_info,
+				       State#pro_wx_state.interval,
+				       self()),
+	    {reply, ok, {Config, Info, State#pro_wx_state{options_pid = Pid}}};
+	_ ->
+	    {reply, ok, {Config, Info, State}}
+    end;
+
+handle_call(save_options, _From, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+    File = save_options(Options, State#pro_wx_state.process_info),
+    %%wxFrame:setStatusText(State#pro_wx_state.frame, "Options saved: " ++ File),
+    {reply, ok, {Config, Info, State}};
+
+
 handle_call(pro_refresh, _From, {Config, _Info, State}) ->
     NewInfo = erltop:update(Config),
     refresh(NewInfo, State),
@@ -460,37 +499,20 @@ handle_call(Msg, _From, State) ->
 
 %%%%%%%%%%%%%%%%%%%%LOOP%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%% handle_event(#wx{id = ?ID_SAVE_OPT, 
-%% 		 event = #wxCommand{type = command_menu_selected}}, 
-%% 	     {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
-%%     File = save_options(Options, State#pro_wx_state.process_info),
-%%     wxFrame:setStatusText(State#pro_wx_state.frame, "Options saved: " ++ File),
+%% handle_event(#wx{event = #wxClose{},obj = Obj}, {Config, Info, State}) ->  %stänga ner = done
+%%    case State#pro_wx_state.frame of
+%% 	Obj -> 
+%% 	    ?OBS_PRO:stop(),
+%% 	    catch wxWindow:'Destroy'(State#pro_wx_state.frame),
+%% 	    exit(shutdown); %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% osäker här
+%% 	_ ->
+%% 	    {noreply, {Config, Info, State}}
+%%   end;
+
+%% handle_event(#wx{id = ?ID_QUIT}, {Config, Info, State}) ->
+%%     ?OBS_PRO:stop(),
+%%     wxWindow:'Destroy'(State#pro_wx_state.frame), %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% här med
 %%     {noreply, {Config, Info, State}};
-
-%% handle_event(#wx{id = Id, 
-%% 		 event = #wxCommand{type = command_menu_selected}}, {Config, Info, State})
-%%   when Id > ?FIRST_NODES_MENU_ID, Id < ?LAST_NODES_MENU_ID ->
-%%     Node2 = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#pro_wx_state.nodes),
-%%     Config2 = Config#opts{node = Node2},
-%%     NewInfo = erltop:update(Config2),
-%%     wxFrame:setTitle(State#pro_wx_state.frame, "etop: " ++ get_node_name(Config2)),
-%%     refresh(NewInfo, State),
-%%     {noreply, {Config2, Info, State}};
-
-handle_event(#wx{event = #wxClose{},obj = Obj}, {Config, Info, State}) ->
-   case State#pro_wx_state.frame of
-	Obj -> 
-	    ?OBS_PRO:stop(),
-	    catch wxWindow:'Destroy'(State#pro_wx_state.frame),
-	    exit(shutdown); %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% osäker här
-	_ ->
-	    {noreply, {Config, Info, State}}
-  end;
-
-handle_event(#wx{id = ?ID_QUIT}, {Config, Info, State}) ->
-    ?OBS_PRO:stop(),
-    wxWindow:'Destroy'(State#pro_wx_state.frame), %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% här med
-    {noreply, {Config, Info, State}};
 
 handle_event(#wx{id = ?ID_KILL}, {Config, Info, State}) ->
     case State#pro_wx_state.selected of
@@ -545,29 +567,6 @@ handle_event(#wx{id = ?ID_TRACE}, {#opts{node = Node} = Config, Info, #pro_wx_st
 	{value, _Tuple} ->
 	    io:format("Already open\n", []),
 	    {noreply, {Config ,Info, State}}
-    end;
-
-handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->
-    FD  =  wxFileDialog:new(State#pro_wx_state.frame,
-			    [{style,?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
-    case wxFileDialog:showModal(FD) of
-	?wxID_OK ->
-	    Path = wxFileDialog:getPath(FD),
-	    io:format("It should Dump to file ~p~n", [Path]);
-	_ -> ok
-    end,
-    {noreply, {Config,Info,State}};
-
-handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
-    case State#pro_wx_state.options_pid of
-	undefined ->
-	    Pid = erltop_options:start(Options,
-				       State#pro_wx_state.process_info,
-				       State#pro_wx_state.interval,
-				       self()),
-	    {noreply, {Config, Info, State#pro_wx_state{options_pid = Pid}}};
-	_ ->
-	    {noreply, {Config, Info, State}}
     end;
 
 handle_event(#wx{event = #wxList{type = command_list_item_right_click, 

@@ -13,8 +13,12 @@
 -define(OBS_SYS_WX, observer_sys_wx).
 -define(OBS_PRO_WX, observer_pro_wx).
 
--define(ID_VIEW, 1).
+-define(ID_REFRESH, 1).
 -define(ID_FILE, 2).
+-define(ID_DUMP_TO_FILE, 4).
+-define(ID_QUIT, 5).
+-define(ID_OPTIONS, 9).
+-define(ID_SAVE_OPT, 10).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -58,10 +62,14 @@ init(_Args) ->
 
 setup(#state{frame = Frame} = State) ->
     Env = wx:get_env(),
+
     %% Setup Menubar & Menus
     MenuBar = wxMenuBar:new(),
-    FileMenu = create_menu([#create_menu{id = ?wxID_ANY, text = "Opt1"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "File", MenuBar),
-    ViewMenu = create_menu([#create_menu{id = ?ID_VIEW, text = "&Refresh"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "View", MenuBar), %View
+
+    FileMenu = create_menu([#create_menu{id = ?ID_FILE, text = "Opt1"}, 
+			    #create_menu{id = ?wxID_ANY, text = "&Opt2"}], "File", MenuBar),
+    ViewMenu = create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}, 
+			    #create_menu{id = ?wxID_ANY, text = "Opt2"}], "View", MenuBar), %View
    
     {Nodes, NodesMenuItems} = get_nodes(),
     NodeMenu = create_menu(NodesMenuItems, "Nodes", MenuBar),
@@ -75,8 +83,6 @@ setup(#state{frame = Frame} = State) ->
     Panel = wxPanel:new(Frame, []),
     Notebook = wxNotebook:new(Panel, 1, [{style, ?wxBK_DEFAULT}]),
   
-    AppPanel = wxPanel:new(Notebook, []),
-
     %% Setup sizer
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
     
@@ -85,11 +91,11 @@ setup(#state{frame = Frame} = State) ->
     wxNotebook:addPage(Notebook, SysPanel, "System", []),
     
     %% Process Panel
-    %ProPanel = wxPanel:new(Notebook, []),
     ProPanel = ?OBS_PRO_WX:start_link(Notebook, Env, MenuBar, StatusBar),
     wxNotebook:addPage(Notebook, ProPanel, "Processes", []),
    
     %% Application Panel
+    AppPanel = wxPanel:new(Notebook, []),
     wxNotebook:addPage(Notebook, AppPanel, "Applications", []),
     
     wxSizer:add(MainSizer, Notebook, [{proportion, 1}, {flag, ?wxEXPAND}]),
@@ -117,12 +123,12 @@ setup(#state{frame = Frame} = State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%Callbacks
-handle_event(#wx{obj = Object, event = #wxNotebook{type = command_notebook_page_changed}}, State) ->
-    Selection = wxNotebook:getSelection(Object),
-    Title = wxNotebook:getPageText(Object, Selection),
+handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}}, State) ->
+    Selection = wxNotebook:getSelection(Notebook),
+    Title = wxNotebook:getPageText(Notebook, Selection),
     case Title of
 	"Processes" ->
-	    ok;
+	    create_pro_menu(State#state.menu_bar);
 	"Applications" ->
 	    ok;
 	"System" ->
@@ -133,15 +139,30 @@ handle_event(#wx{obj = Object, event = #wxNotebook{type = command_notebook_page_
 handle_event(#wx{event = #wxClose{}}, State) ->
     {stop, normal, State};
 
-handle_event(#wx{id = ?ID_VIEW, event = #wxCommand{type = command_menu_selected}}, State) ->
+handle_event(#wx{id = ?ID_SAVE_OPT, 
+		 event = #wxCommand{type = command_menu_selected}}, State) -> 
+    ?OBS_PRO_WX:pro_save_options(),
+    {noreply, State};
+
+handle_event(#wx{id = ?ID_DUMP_TO_FILE}, State) -> %% PRO MENU EVENT
+    ?OBS_PRO_WX:pro_dump_to_file(),
+    {noreply, State};
+
+handle_event(#wx{id = ?ID_OPTIONS}, State) ->% #pro_wx_state{trace_options = Options} = State}) -> %% PRO MENU EVENT
+    ?OBS_PRO_WX:pro_view_trace_options(),
+    {noreply, State};
+
+handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, State) ->
     io:format("Klickade på view~n"),
     case check_page_title(State#state.notebook) of
 	"Processes" ->
-	    ?OBS_PRO_WX:pro_refresh();
+	    ?OBS_PRO_WX:pro_refresh(),
+	    io:format("Did pro_refresh()");
 	_Else ->
 	    ok% do something depending on which page
     end,
     {noreply, State};
+
 
 handle_event(#wx{id = Id, 
 		 event = #wxCommand{type = command_menu_selected}}, State)
@@ -245,4 +266,33 @@ update_node_list(State) ->
 		  end,
 		  NodesMenuItems),
     State#state{nodes = Nodes}.
+
+
+
+create_pro_menu(MenuBar) ->
+    clear_menu_bar(MenuBar),
+    create_menu([#create_menu{id = ?ID_DUMP_TO_FILE, text = "&Dump to file"},
+		 #create_menu{id = ?ID_OPTIONS, text = "Options"},
+		 #create_menu{id = ?ID_SAVE_OPT, text = "Save options..."}],
+		 %#create_menu{id = ?ID_QUIT, text = "&Quit"}],
+		"File", MenuBar),
+    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}],
+			  "View", MenuBar),
+    {Nodes, NodesMenuItems} = get_nodes(),
+    create_menu(NodesMenuItems, "Nodes", MenuBar).
+
+
+clear_menu_bar(MenuBar) ->
+    Count = wxMenuBar:getMenuCount(MenuBar),
+    remove_menu_item(MenuBar, Count).
+
+remove_menu_item(MenuBar, 0) ->
+    ok;
+remove_menu_item(MenuBar, Item) ->
+    wxMenuBar:remove(MenuBar, Item),
+    remove_menu_item(MenuBar, Item-1).
+
+
+
+
 
