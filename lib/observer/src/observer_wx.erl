@@ -2,17 +2,45 @@
 
 -behaviour(wx_object).
 
--compile(export_all).
-%% Client API
 -export([start/0]).
+-export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, 
+	 handle_call/3, handle_info/2, check_page_title/1, get_pro_panel/0]).
 
-%% wx_object callbacks
--export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, handle_call/3, handle_info/2]).
-
+%% Includes
 -include_lib("wx/include/wx.hrl").
--include("observer_defs.hrl").
--include("erltop_defs.hrl").
-	 
+
+%% Defines
+-define(OBS_SYS_WX, observer_sys_wx).
+-define(OBS_PRO_WX, observer_pro_wx).
+
+-define(ID_VIEW, 1).
+-define(ID_FILE, 2).
+
+-define(FIRST_NODES_MENU_ID, 1000).
+-define(LAST_NODES_MENU_ID,  2000).
+
+%% Records
+-record(state,
+	{	  frame,
+		  menu_bar,
+		  node_menu,
+		  file_menu,
+		  view_menu,
+		  status_bar,
+		  notebook,
+		  main_panel,
+		  app_panel,
+		  pro_panel,
+		  sys_panel,
+		  nodes
+	}).
+
+-record(create_menu, 
+	{id,
+	 text,
+	 type = append,
+	 check = true
+	}).
 
 start() ->
     wx_object:start(?MODULE, [], []).
@@ -22,37 +50,43 @@ start() ->
 init(_Args) ->
     wx:new(),
     Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Observer", [{size, {1000, 500}}]),
-    State = #state{name  = frame, ref = Frame},
+    State = #state{frame = Frame},
     UpdState = setup(State),
     wxFrame:show(Frame),
+    net_kernel:monitor_nodes(true),
     {Frame, UpdState}.
 
-setup(#state{ref = Frame} = State) ->
-    
+setup(#state{frame = Frame} = State) ->
+    Env = wx:get_env(),
     %% Setup Menubar & Menus
     MenuBar = wxMenuBar:new(),
-    create_menu([#create_menu{id = ?wxID_ANY, text = "Opt1"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "File", MenuBar), %File
-    create_menu([#create_menu{id = ?wxID_ANY, text = "Opt1"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "View", MenuBar), %View
-    create_menu([#create_menu{id = ?wxID_ANY, text = "Opt1"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "Nodes", MenuBar),%node
+    FileMenu = create_menu([#create_menu{id = ?wxID_ANY, text = "Opt1"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "File", MenuBar),
+    ViewMenu = create_menu([#create_menu{id = ?ID_VIEW, text = "&Refresh"}, #create_menu{id = ?wxID_ANY, text = "Opt2"}], "View", MenuBar), %View
+   
+    {Nodes, NodesMenuItems} = get_nodes(),
+    NodeMenu = create_menu(NodesMenuItems, "Nodes", MenuBar),
+    
     wxFrame:setMenuBar(Frame, MenuBar),
+
+    %% Setup Statusbar
+    StatusBar = wxFrame:createStatusBar(Frame, []),
     
     %% Setup panels
     Panel = wxPanel:new(Frame, []),
     Notebook = wxNotebook:new(Panel, 1, [{style, ?wxBK_DEFAULT}]),
-    
-    SysPanel = wxPanel:new(Notebook, []),
-    ProPanel = wxPanel:new(Notebook, []),
+  
     AppPanel = wxPanel:new(Notebook, []),
 
     %% Setup sizer
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
     
     %% System Panel
+    SysPanel = ?OBS_SYS_WX:start_link(Notebook, Env),
     wxNotebook:addPage(Notebook, SysPanel, "System", []),
-    Env = wx:get_env(),
-    ?OBS_SYS_WX:start_link(Notebook, SysPanel, Env),
     
     %% Process Panel
+    %ProPanel = wxPanel:new(Notebook, []),
+    ProPanel = ?OBS_PRO_WX:start_link(Notebook, Env, MenuBar, StatusBar),
     wxNotebook:addPage(Notebook, ProPanel, "Processes", []),
    
     %% Application Panel
@@ -62,19 +96,21 @@ setup(#state{ref = Frame} = State) ->
     wxPanel:setSizer(Panel, MainSizer),
     
     wxNotebook:connect(Notebook, command_notebook_page_changed),
-    wxFrame:connect(Frame, close_window),
-    
-    PanelRec = #obj{name = panel, ref = Panel, parent = Frame},
-    NoteRec = #obj{name = notebook, ref = Notebook, parent = Panel},
-    SysPanelRec = #obj{name = sys_panel, ref = SysPanel},
-    AppPanelRec = #obj{name = app_panel, ref = AppPanel},
-    ProPanelRec = #obj{name = pro_panel, ref = ProPanel},
-    
-    UpdState = State#state{children = [PanelRec,
-				       NoteRec,
-				       SysPanelRec,
-				       AppPanelRec,
-				       ProPanelRec]},
+    wxFrame:connect(Frame, close_window, [{skip, true}]),
+    wxMenu:connect(Frame, command_menu_selected, []),
+          
+    UpdState = State#state{main_panel = Panel,
+			   notebook = Notebook,
+			   menu_bar = MenuBar,
+			   node_menu = NodeMenu,
+			   file_menu = FileMenu,
+			   view_menu = ViewMenu,
+			   status_bar = StatusBar,
+			   sys_panel = SysPanel,
+			   pro_panel = ProPanel,
+			   app_panel = AppPanel,
+			   nodes = Nodes
+			  },
     UpdState.
 
 
@@ -97,7 +133,31 @@ handle_event(#wx{obj = Object, event = #wxNotebook{type = command_notebook_page_
 handle_event(#wx{event = #wxClose{}}, State) ->
     {stop, normal, State};
 
+handle_event(#wx{id = ?ID_VIEW, event = #wxCommand{type = command_menu_selected}}, State) ->
+    io:format("Klickade på view~n"),
+    case check_page_title(State#state.notebook) of
+	"Processes" ->
+	    ?OBS_PRO_WX:pro_refresh();
+	_Else ->
+	    ok% do something depending on which page
+    end,
+    {noreply, State};
+
+handle_event(#wx{id = Id, 
+		 event = #wxCommand{type = command_menu_selected}}, State)
+  when Id > ?FIRST_NODES_MENU_ID, Id < ?LAST_NODES_MENU_ID ->
+    case check_page_title(State#state.notebook) of
+	"Processes" ->
+	    Node2 = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#state.nodes),
+	    ?OBS_PRO_WX:pro_change_node(Node2);
+	_Else ->
+	    ok %do something depending on page
+    end,
+    {noreply, State};
+
 handle_event(Event, State) ->
+    %% TODO: HANTERA MENUKOMMANDON UTIFRÅN VILKEN FLIK MAN ÄR. T.EX DUMP TO FILE ETC.
+    %% BYT MENYER UTIFRÅN FLIK
     io:format("handle event ~p\n", [Event]),
     {noreply, State}.
 
@@ -105,9 +165,22 @@ handle_cast(Cast, State) ->
     io:format("~p:~p: Got cast ~p~n", [?MODULE, ?LINE, Cast]),
     {noreply, State}.
 
+handle_call(get_pro_panel, _From, State) ->
+    io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, "get pro panel"]),
+    ProPanel = State#state.pro_panel,
+    {reply, ProPanel, State};
+
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
+
+handle_info({nodeup, _Node}, State) ->
+    State2 = update_node_list(State),
+    {noreply, State2};
+
+handle_info({nodedown, _Node}, State) ->
+    State2 = update_node_list(State),
+    {noreply, State2};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -115,7 +188,6 @@ handle_info(Info, State) ->
 
 terminate(Reason, _State) ->
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
-    wx:destroy(),
     ok.
 
 code_change(_, _, State) ->
@@ -126,6 +198,9 @@ code_change(_, _, State) ->
 check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),
     wxNotebook:getPageText(Notebook, Selection).
+
+get_pro_panel() ->
+    wx_object:call(self(), get_pro_panel).
 
 create_menu(MenuItems, Name, MenuBar) ->
     Menu = wxMenu:new(),
@@ -146,3 +221,28 @@ create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check},
 	separator ->
 	    wxMenu:appendSeparator(Menu)
     end.
+
+
+get_nodes() ->
+    Nodes = [node()| nodes()],
+    {_, Menues} =
+	lists:foldl(fun(Node, {Id, Acc}) when Id < ?LAST_NODES_MENU_ID ->
+			    {Id + 1, [#create_menu{id = Id + ?FIRST_NODES_MENU_ID, 
+						   text =  atom_to_list(Node)} | Acc]} 
+		    end,
+		    {1, []},
+		    Nodes),
+    {Nodes, lists:reverse(Menues)}.
+
+update_node_list(State) ->
+    {Nodes, NodesMenuItems} = get_nodes(),
+    lists:foreach(fun(Item) ->
+			  wxMenu:delete(State#state.node_menu, Item)
+		  end,
+		  wxMenu:getMenuItems(State#state.node_menu)),
+    lists:foreach(fun(Record) ->
+			  create_menu_item(Record, State#state.node_menu)
+		  end,
+		  NodesMenuItems),
+    State#state{nodes = Nodes}.
+

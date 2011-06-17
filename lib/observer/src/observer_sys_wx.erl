@@ -2,20 +2,42 @@
 
 -behaviour(wx_object).
 
--export([start_link/3]).
+-export([start_link/2]).
 %% wx_object callbacks
--export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3, handle_event/2]).
+-export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
+	 handle_event/2]).
 
 -include_lib("wx/include/wx.hrl").
--include("observer_defs.hrl").
 
-start_link(Notebook, Panel, Env) ->
+%% Defines
+-define(OBS_SYS_LOGIC, observer_sys).
+-define(OBS, observer_wx).
+
+%% Records
+-record(sys_wx_state,
+	{panel,
+	 no_procs,
+	 no_cpu,
+	 no_cpu_available,
+	 no_cpu_online,
+	 tot_alloc,
+	 proc_used,
+	 proc_alloc,
+	 atom_used,
+	 atom_alloc,
+	 binary_alloc,
+	 code_alloc,
+	 ets_alloc}).
+
+
+start_link(Notebook, Env) ->
     wx:set_env(Env),
-    wx_object:start_link(?MODULE, [Notebook, Panel], []).
+    wx_object:start_link(?MODULE, [Notebook], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init([Notebook, SysPanel]) ->
+init([Notebook]) ->
+    SysPanel = wxPanel:new(Notebook, []),
     
     %% Setup sizers
     SysSizer = wxBoxSizer:new(?wxVERTICAL),
@@ -77,21 +99,20 @@ init([Notebook, SysPanel]) ->
     EtsAllocTxt = create_info_label(SysPanel, SysRightMemSizer, ?OBS_SYS_LOGIC:ets_alloc_str(NodeInfo)),
     
     %% Create StateRecord
-    SysPanelState = #state{name = sys_panel, 
-			   ref = SysPanel,
-			   children = [#obj{name = no_procs, ref = NoProcsTxt},
-				       #obj{name = no_cpu, ref = NoCpuTxt},
-				       #obj{name = no_cpu_available, ref = NoCpuAvTxt},
-				       #obj{name = no_cpu_online, ref = NoCpuOnTxt},
-				       #obj{name = tot_alloc, ref = TotAllocTxt},
-				       #obj{name = proc_used, ref = ProcUsedTxt},
-				       #obj{name = proc_alloc, ref = ProcAllocTxt},
-				       #obj{name = atom_used, ref = AtomUsedTxt},
-				       #obj{name = atom_alloc, ref = AtomAllocTxt},
-				       #obj{name = binary_alloc, ref = BinaryAllocTxt},
-				       #obj{name = code_alloc, ref = CodeAllocTxt},
-				       #obj{name = ets_alloc, ref = EtsAllocTxt}]},
-    
+    SysPanelState = #sys_wx_state{
+      panel = SysPanel,
+      no_procs = NoProcsTxt,
+      no_cpu = NoCpuTxt,
+      no_cpu_available = NoCpuAvTxt,
+      no_cpu_online= NoCpuOnTxt,
+      tot_alloc = TotAllocTxt,
+      proc_used = ProcUsedTxt,
+      proc_alloc = ProcAllocTxt,
+      atom_used = AtomUsedTxt,
+      atom_alloc = AtomAllocTxt,
+      binary_alloc = BinaryAllocTxt,
+      code_alloc = CodeAllocTxt,
+      ets_alloc = EtsAllocTxt},
     
     wxPanel:setSizer(SysPanel, SysSizer),
     erlang:send_after(3000, self(), {update, Notebook}),
@@ -109,18 +130,26 @@ update_syspage(Notebook, State) ->
     case ?OBS:check_page_title(Notebook) =:= "System" of
 	true ->
 	    io:format("Updating syspage...~n"),
-	    NodeInfo = get_syspage_info(),
-	    TxtLabelList = State#state.children,
 	    
-	    lists:foreach(fun(X) ->
-				  update_info_label(X, NodeInfo)
-			  end, 
-			  TxtLabelList);
+	    update_info_label(no_procs, State#sys_wx_state.no_procs),
+	    update_info_label(no_cpu, State#sys_wx_state.no_cpu),
+	    update_info_label(no_cpu_available, State#sys_wx_state.no_cpu_available),
+	    update_info_label(no_cpu_online, State#sys_wx_state.no_cpu_online),
+	    update_info_label(tot_alloc, State#sys_wx_state.tot_alloc),
+	    update_info_label(proc_used, State#sys_wx_state.proc_used),
+	    update_info_label(proc_alloc, State#sys_wx_state.proc_alloc),
+	    update_info_label(atom_used, State#sys_wx_state.atom_used),
+	    update_info_label(atom_alloc, State#sys_wx_state.atom_alloc),
+	    update_info_label(binary_alloc, State#sys_wx_state.binary_alloc),
+	    update_info_label(code_alloc, State#sys_wx_state.code_alloc),
+	    update_info_label(ets_alloc, State#sys_wx_state.ets_alloc);
+	
 	false ->
 	    ok
     end.
 
-update_info_label(#obj{name = Name, ref = WxText}, NodeInfo) ->
+update_info_label(Name, WxText) ->
+    NodeInfo = get_syspage_info(),
     Msg = case Name of
 	      no_procs ->
 		  ?OBS_SYS_LOGIC:no_procs_str(NodeInfo);
@@ -147,6 +176,7 @@ update_info_label(#obj{name = Name, ref = WxText}, NodeInfo) ->
 	      ets_alloc ->
 		  ?OBS_SYS_LOGIC:ets_alloc_str(NodeInfo)
 	  end,
+    
     wxStaticText:setLabel(WxText, Msg).
 
 

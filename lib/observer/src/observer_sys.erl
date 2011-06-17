@@ -1,11 +1,26 @@
 -module(observer_sys).
 
--include("observer_defs.hrl").
+-export([node_info/0, node_name_str/1, no_procs_str/1, no_cpu_str/1, 
+	 no_cpu_available_str/1, no_cpu_online_str/1, tot_alloc_str/1, 
+	 proc_used_str/1, proc_alloc_str/1, atom_used_str/1, atom_alloc_str/1,
+	 binary_alloc_str/1, code_alloc_str/1, ets_alloc_str/1]).
 
--export([node_info/0, node_name_str/1, no_procs_str/1, no_cpu_str/1, no_cpu_available_str/1,
-	no_cpu_online_str/1, tot_alloc_str/1, proc_used_str/1, proc_alloc_str/1,
-	atom_used_str/1, atom_alloc_str/1, binary_alloc_str/1, code_alloc_str/1, ets_alloc_str/1]).
+-record(node_info, {node_name,
+		    no_procs, % number of processes
+		    no_cpu, % number of logical cpu's
+		    no_cpu_available, %number of logical cpu's available
+		    no_cpu_online, % number of logical cpu's online
+		    tot_alloc, % total memory allocated
+		    proc_used, % memory used by processes
+		    proc_alloc, % memory alloc by processes,
+		    atom_used, % memory used by atoms
+		    atom_alloc, % memory allocated by atoms
+		    binary_alloc, % memory allocated for binaries
+		    code_alloc, % memory allocated by code
+		    ets_alloc}).% memory allocated by ets
 
+
+%%%%%%%%%%%%%%%%%%%%%%% functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 node_info() ->
     #node_info{node_name = node_name(),
 	       no_procs = process_count(),
@@ -20,9 +35,8 @@ node_info() ->
 	       binary_alloc = binary_alloc(),
 	       code_alloc = code_alloc(),
 	       ets_alloc = ets_alloc()
-	       }.
+	      }.
 
-%%%%%%%%%%%%%%%%%%%%%%% internal functions %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 node_name() ->
     node().
 
