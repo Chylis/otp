@@ -186,7 +186,7 @@ data_handler(Reader, Opts) ->
     end.
 
 stop(Opts) ->
-    (Opts#opts.out_mod):stop(Opts#opts.out_proc),
+    %(Opts#opts.out_mod):stop(Opts#opts.out_proc),
     if Opts#opts.tracing == on -> erltop_tr:stop_tracer(Opts);
        true -> ok
     end,
