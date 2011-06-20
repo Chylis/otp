@@ -2,7 +2,7 @@
 
 -behaviour(wx_object).
 
--export([start_link/2]).
+-export([start_link/3]).
 %% wx_object callbacks
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
 	 handle_event/2]).
@@ -13,9 +13,14 @@
 -define(OBS_SYS_LOGIC, observer_sys).
 -define(OBS, observer_wx).
 
+-define(ID_REFRESH, 3).
+
+
 %% Records
 -record(sys_wx_state,
 	{panel,
+	 menubar,
+	 parent_notebook,
 	 no_procs,
 	 no_cpu,
 	 no_cpu_available,
@@ -27,16 +32,24 @@
 	 atom_alloc,
 	 binary_alloc,
 	 code_alloc,
-	 ets_alloc}).
+	 ets_alloc,
+	 node_label,
+	 node}).
 
+-record(create_menu, 
+	{id,
+	 text,
+	 type = append,
+	 check = true
+	}).
 
-start_link(Notebook, Env) ->
+start_link(Notebook, Env, MenuBar) ->
     wx:set_env(Env),
-    wx_object:start_link(?MODULE, [Notebook], []).
+    wx_object:start_link(?MODULE, [Notebook, MenuBar], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init([Notebook]) ->
+init([Notebook, MenuBar]) ->
     SysPanel = wxPanel:new(Notebook, []),
     
     %% Setup sizers
@@ -69,8 +82,8 @@ init([Notebook]) ->
     wxSizer:addSpacer(SysMidMemSizer, 70),
     
     %% Create labels
-    NodeInfo = get_syspage_info(),
-    create_info_label(SysPanel, SysNodeSizer, ?OBS_SYS_LOGIC:node_name_str(NodeInfo)),
+    NodeInfo = get_syspage_info(node()),
+    NodeLabel = create_info_label(SysPanel, SysNodeSizer, ?OBS_SYS_LOGIC:node_name_str(NodeInfo)),
     
     create_info_label(SysPanel, SysLeftLoadSizer, "logical CPU's:"),
     create_info_label(SysPanel, SysLeftLoadSizer, "logical CPU's available:"),
@@ -101,6 +114,9 @@ init([Notebook]) ->
     %% Create StateRecord
     SysPanelState = #sys_wx_state{
       panel = SysPanel,
+      menubar = MenuBar,
+      parent_notebook = Notebook,
+      node_label = NodeLabel, 
       no_procs = NoProcsTxt,
       no_cpu = NoCpuTxt,
       no_cpu_available = NoCpuAvTxt,
@@ -112,45 +128,88 @@ init([Notebook]) ->
       atom_alloc = AtomAllocTxt,
       binary_alloc = BinaryAllocTxt,
       code_alloc = CodeAllocTxt,
-      ets_alloc = EtsAllocTxt},
+      ets_alloc = EtsAllocTxt,
+      node = node()
+     },
     
     wxPanel:setSizer(SysPanel, SysSizer),
+    create_sys_menu(MenuBar),
     erlang:send_after(3000, self(), {update, Notebook}),
     {SysPanel, SysPanelState}.
 
-get_syspage_info() ->
-    rpc:call(node(), ?OBS_SYS_LOGIC, node_info, []).
+get_syspage_info(Node) ->
+    rpc:call(Node, ?OBS_SYS_LOGIC, node_info, []).
 
 create_info_label(Panel, Sizer, Msg) ->
     WxText = wxStaticText:new(Panel, ?wxID_ANY, Msg),
     wxSizer:add(Sizer, WxText),
     WxText.
 
+
+create_menu(MenuItems, Name, MenuBar) ->
+    Menu = wxMenu:new(),
+    lists:foreach(fun(Record) ->
+			  create_menu_item(Record, Menu)
+		  end,
+		  MenuItems),
+    wxMenuBar:append(MenuBar, Menu, Name),
+    Menu.
+
+create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check}, Menu) ->
+    case Type of
+	append ->
+	    wxMenu:append(Menu, Id, Text);
+	appendCheck ->
+	    wxMenu:appendCheckItem(Menu, Id, Text),
+	    wxMenu:check(Menu, Id, Check);
+	separator ->
+	    wxMenu:appendSeparator(Menu)
+    end.
+
+
+create_sys_menu(MenuBar) ->
+    clear_menu_bar(MenuBar),
+    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}], "View", MenuBar).
+    
+clear_menu_bar(MenuBar) ->
+    Count = wxMenuBar:getMenuCount(MenuBar),
+    remove_menu_item(MenuBar, Count).
+
+remove_menu_item(_MenuBar, 2) ->
+    ok;
+remove_menu_item(MenuBar, Item) ->
+    wxMenuBar:remove(MenuBar, Item),
+    remove_menu_item(MenuBar, Item-1).
+
 update_syspage(Notebook, State) ->
     case ?OBS:check_page_title(Notebook) =:= "System" of
 	true ->
-	    io:format("Updating syspage...~n"),
+	    io:format("Updating syspage for node ~p~n", [State#sys_wx_state.node]),
 	    
-	    update_info_label(no_procs, State#sys_wx_state.no_procs),
-	    update_info_label(no_cpu, State#sys_wx_state.no_cpu),
-	    update_info_label(no_cpu_available, State#sys_wx_state.no_cpu_available),
-	    update_info_label(no_cpu_online, State#sys_wx_state.no_cpu_online),
-	    update_info_label(tot_alloc, State#sys_wx_state.tot_alloc),
-	    update_info_label(proc_used, State#sys_wx_state.proc_used),
-	    update_info_label(proc_alloc, State#sys_wx_state.proc_alloc),
-	    update_info_label(atom_used, State#sys_wx_state.atom_used),
-	    update_info_label(atom_alloc, State#sys_wx_state.atom_alloc),
-	    update_info_label(binary_alloc, State#sys_wx_state.binary_alloc),
-	    update_info_label(code_alloc, State#sys_wx_state.code_alloc),
-	    update_info_label(ets_alloc, State#sys_wx_state.ets_alloc);
+	    update_info_label(State#sys_wx_state.node, node_label, State#sys_wx_state.node_label),
+	    update_info_label(State#sys_wx_state.node, no_procs, State#sys_wx_state.no_procs),
+	    update_info_label(State#sys_wx_state.node, no_procs, State#sys_wx_state.no_procs),
+	    update_info_label(State#sys_wx_state.node, no_cpu, State#sys_wx_state.no_cpu),
+	    update_info_label(State#sys_wx_state.node, no_cpu_available, State#sys_wx_state.no_cpu_available),
+	    update_info_label(State#sys_wx_state.node, no_cpu_online, State#sys_wx_state.no_cpu_online),
+	    update_info_label(State#sys_wx_state.node, tot_alloc, State#sys_wx_state.tot_alloc),
+	    update_info_label(State#sys_wx_state.node, proc_used, State#sys_wx_state.proc_used),
+	    update_info_label(State#sys_wx_state.node, proc_alloc, State#sys_wx_state.proc_alloc),
+	    update_info_label(State#sys_wx_state.node, atom_used, State#sys_wx_state.atom_used),
+	    update_info_label(State#sys_wx_state.node, atom_alloc, State#sys_wx_state.atom_alloc),
+	    update_info_label(State#sys_wx_state.node, binary_alloc, State#sys_wx_state.binary_alloc),
+	    update_info_label(State#sys_wx_state.node, code_alloc, State#sys_wx_state.code_alloc),
+	    update_info_label(State#sys_wx_state.node, ets_alloc, State#sys_wx_state.ets_alloc);
 	
 	false ->
 	    ok
     end.
 
-update_info_label(Name, WxText) ->
-    NodeInfo = get_syspage_info(),
+update_info_label(Node, Name, WxText) ->
+    NodeInfo = get_syspage_info(Node),
     Msg = case Name of
+	      node_label ->
+		  ?OBS_SYS_LOGIC:node_name_str(NodeInfo);
 	      no_procs ->
 		  ?OBS_SYS_LOGIC:no_procs_str(NodeInfo);
 	      no_cpu ->
@@ -187,6 +246,11 @@ handle_info({update, Notebook}, State) ->
     erlang:send_after(3000, self(), {update, Notebook}),
     {noreply, State};
 
+handle_info({node, Node}, State) ->
+    UpdState = State#sys_wx_state{node = Node},
+    update_syspage(State#sys_wx_state.parent_notebook, UpdState),
+    {noreply, UpdState};
+
 handle_info(Info, State) ->
     io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
@@ -201,6 +265,15 @@ code_change(_, _, State) ->
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
+
+handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, State) ->
+    io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
+    update_syspage(State#sys_wx_state.parent_notebook, State),
+    {noreply, State};
+
+handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, State) ->
+    create_sys_menu(State#sys_wx_state.menubar),
+    {noreply, State};
 
 handle_event(Event, State) ->
     io:format("handle event ~p\n", [Event]),

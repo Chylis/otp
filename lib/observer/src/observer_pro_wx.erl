@@ -18,19 +18,23 @@
 -define(COL_MSG,  5).
 -define(COL_FUN,  6).
 
--define(ID_KILL, 0).
--define(ID_VIEW, 1).
--define(ID_PROC, 2).
+-define(ID_KILL, 200).
+-define(ID_VIEW, 201).
+-define(ID_PROC, 202).
+-define(ID_REFRESH, 3).
 -define(ID_DUMP_TO_FILE, 4).
 -define(ID_ACCUMULATE, 6).
 -define(ID_TRACE, 8).
 -define(ID_OPTIONS, 9).
+-define(ID_SAVE_OPT, 10).
 
 -define(ID_MODULE_INFO, 12).
 -define(OK, 11).
 -define(MAX_PROCINFO_TEXT_LENGTH, 35).
 -define(NOTEBOOK, 20).
 
+-define(FIRST_NODES_MENU_ID, 1000).
+-define(LAST_NODES_MENU_ID,  2000).
 
 %% Records
 -record(pid, {window, traced}).
@@ -56,6 +60,8 @@
 		       grid, 
 		       selected, 
 		       frame,
+		       menubar,
+		       parent_notebook,
 		       sort_order = {#etop_proc_info.reds, decr},
 		       panel, trace_options = #trace_options{},
 		       options_pid,
@@ -89,6 +95,7 @@ start_link(Notebook, Env, MenuBar, StatusBar) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init([Notebook, MenuBar, StatusBar]) ->
+    process_flag(trap_exit, true),
     Config = ?OBS_PRO:start(self()),
     {ProPanel, State} = setup(Notebook, MenuBar, StatusBar),
     Info = ?OBS_PRO:update(Config),
@@ -114,17 +121,71 @@ setup(Notebook, MenuBar, StatusBar) ->
     wxWindow:setSizer(ProPanel, Sizer),
     
     Interval = 5000, %erltop:getopt(intv, Config),
+
+    
+    DefaultProcessInfo = [ % sorted
+			   error_handler,
+			   garbage_collection,
+			   group_leader,
+			   heap_size,
+			   links,
+			   priority,
+			   trap_exit,
+			   message_queue_len],
+    File = filename:join(os:getenv("HOME"), ".erlang_tools/pman.opts"),
+    {Opt, ProcessInfo} =
+	case filelib:is_file(File) of
+	    true ->
+		case file:consult(File) of
+		    {ok, Terms} ->
+			parse_options(Terms, #trace_options{}, []);
+		    {error, Reason} ->
+			io:format("Error:  ~p\n", [Reason]),
+			{#trace_options{}, []}
+		end;
+	    false ->
+		{#trace_options{}, []}
+	end,
+    ProcessInfo2 =
+	case ProcessInfo of
+	    [] ->
+		DefaultProcessInfo;
+	    Other ->
+		Other
+	end,
     
     State =  #pro_wx_state{popup_menu  = Menu,
 			   grid        = Grid,
 			   frame       = ProPanel,
-						%trace_options = Opt,
-						%process_info = ProcessInfo2,
+			   parent_notebook = Notebook,
+			   trace_options = Opt,
+			   process_info = ProcessInfo2,
+			   menubar = MenuBar,
 			   statusbar = StatusBar,
 			   interval = Interval,
 			   nodes    = [node() | nodes()]}, %temporary nodes...!
     {ProPanel, State}.
 %% UI-creation
+
+create_pro_menu(MenuBar) ->
+    clear_menu_bar(MenuBar),
+    create_menu([#create_menu{id = ?ID_DUMP_TO_FILE, text = "&Dump to file"},
+		 #create_menu{id = ?ID_OPTIONS, text = "&Options"},
+		 #create_menu{id = ?ID_SAVE_OPT, text = "&Save options..."}],
+		"&Options", MenuBar),
+    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}],
+		"View", MenuBar).
+
+clear_menu_bar(MenuBar) ->
+    Count = wxMenuBar:getMenuCount(MenuBar),
+    remove_menu_item(MenuBar, Count).
+
+remove_menu_item(_MenuBar, 2) ->
+    ok;
+remove_menu_item(MenuBar, Item) ->
+    wxMenuBar:remove(MenuBar, Item),
+    remove_menu_item(MenuBar, Item-1).
+
 
 create_node_info_ui(Panel) ->
     Sizer  = wxBoxSizer:new(?wxVERTICAL),
@@ -272,10 +333,12 @@ save_options(#trace_options{send = Send,
 			    on_all_link = OnAllLink,
 			    in_window = InWindow},
 	     ProcessInfoList) ->
+    io:format("ProcessInfoList: ~p~n", [ProcessInfoList]),
     ProcessInfo = 
 	lists:foldl(fun(Atom , Acc) ->
 			    ["{" ++ atom_to_list(Atom) ++ ", procinfo}.\n" | Acc]
 		    end, [], ProcessInfoList),
+    io:format("ProcessInfo: ~p~n", [ProcessInfo]),
     Dir = filename:join(os:getenv("HOME"), ".erlang_tools"),
     file:make_dir(Dir), 
     File = filename:join(Dir, "etop.opts"),
@@ -360,6 +423,33 @@ opt_warning(Pid, Reason) ->
 				[?MODULE, self(), {'EXIT', Pid, Bad}])
     end.
 
+
+parse_options([H | T], Rec, Acc) ->
+    {Rec2, Acc2} =
+	case H of
+	    {send, Bool}         -> {Rec#trace_options{send = Bool}, Acc};
+	    {treceive, Bool}     -> {Rec#trace_options{treceive = Bool}, Acc};
+	    {functions, Bool}    -> {Rec#trace_options{functions = Bool}, Acc};
+	    {events, Bool}       -> {Rec#trace_options{events = Bool}, Acc};
+	    {on_1st_spawn, Bool} -> {Rec#trace_options{on_1st_spawn = Bool}, Acc};
+	    {on_all_spawn, Bool} -> {Rec#trace_options{on_all_spawn = Bool}, Acc};
+	    {on_1st_link, Bool}  -> {Rec#trace_options{on_1st_link = Bool}, Acc};
+	    {on_all_link, Bool}  -> {Rec#trace_options{on_all_link = Bool}, Acc};
+	    {in_window, Bool}    -> {Rec#trace_options{in_window = Bool}, Acc};
+	    {ProcInfo, procinfo} -> {Rec, [ProcInfo | Acc]};
+
+	    Other ->
+		io:format("Not a valid option.\n~p\n", [Other]),
+		{Rec, Acc}
+	end,
+    parse_options(T, Rec2, Acc2);
+
+parse_options([], Rec, Acc) ->
+    {Rec, Acc};
+parse_options(_Other, _Rec, _Acc) ->
+    io:format("Default.\n", []),
+    {#trace_options{}, []} .
+
 to_str(Value) when is_atom(Value) ->
     atom_to_list(Value);
 to_str({A, B}) ->
@@ -383,23 +473,18 @@ to_str(No) when is_integer(No) ->
 to_str(ShouldNotGetHere) ->
     erlang:error({?MODULE, to_str, ShouldNotGetHere}).
 
-pro_refresh() ->
-    wx_object:call(self(), pro_refresh).
 
-pro_change_node(Node) ->
-    wx_object:call(self(), {pro_change_node, Node}).
+get_nodes() ->
+    Nodes = [node()| nodes()],
+    {_, Menues} =
+	lists:foldl(fun(Node, {Id, Acc}) when Id < ?LAST_NODES_MENU_ID ->
+			    {Id + 1, [#create_menu{id = Id + ?FIRST_NODES_MENU_ID, 
+						   text =  atom_to_list(Node)} | Acc]} 
+		    end,
+		    {1, []},
+		    Nodes),
+    {Nodes, lists:reverse(Menues)}.
 
-pro_dump_to_file() -> %här eller i logikdel????
-    wx_object:call(self(), dump_to_file).
-
-pro_view_trace_options() ->
-    wx_object:call(self(), view_trace_options).
-
-pro_save_options() ->
-    wx_object:call(self(), save_options).
-
-
-    
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -412,8 +497,8 @@ handle_info(time_to_update, {Config, _Info, State}) ->
 
 handle_info({checked, Opt, ProcessInfo, Interval}, {Config, Info, State}) ->
     State2 = State#pro_wx_state{trace_options = Opt,
-			 process_info  = ProcessInfo,
-			 interval = Interval},
+				process_info  = ProcessInfo,
+				interval = Interval},
     {noreply, {Config, Info, State2}};
 
 handle_info({save, File}, State) ->
@@ -437,58 +522,26 @@ handle_info({'EXIT', Pid, Reason}, {Config, Info, State}) ->
 	    {noreply, {Config, Info, State}}
     end;
 
+handle_info({node, Node}, {Config, Info, State}) ->
+    Config2 = Config#opts{node = Node},
+    NewInfo = erltop:update(Config2),
+    %%wxFrame:setTitle(State#state.frame, "etop: " ++ get_node_name(Config2)),
+    refresh(NewInfo, State),
+    {noreply, {Config2, Info, State}};
+
+
 handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
 
 terminate(Reason, _State) ->
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
+    erltop:stop(),
     ok.
 
 code_change(_, _, State) ->
     {stop, not_yet_implemented, State}.
 
-
-
-handle_call(dump_to_file, _From, {Config, Info, State}) ->
-    FD  =  wxFileDialog:new(State#pro_wx_state.frame, [{style,?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
-    case wxFileDialog:showModal(FD) of
-	?wxID_OK ->
-	    Path = wxFileDialog:getPath(FD),
-	    io:format("It should Dump to file ~p~n", [Path]);
-	_ -> ok
-    end,
-    {reply, ok, {Config, Info, State}};
-
-handle_call(view_trace_options, _From, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
-    case State#pro_wx_state.options_pid of
-	undefined ->
-	    Pid = erltop_options:start(Options,
-				       State#pro_wx_state.process_info,
-				       State#pro_wx_state.interval,
-				       self()),
-	    {reply, ok, {Config, Info, State#pro_wx_state{options_pid = Pid}}};
-	_ ->
-	    {reply, ok, {Config, Info, State}}
-    end;
-
-handle_call(save_options, _From, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
-    File = save_options(Options, State#pro_wx_state.process_info),
-    %%wxFrame:setStatusText(State#pro_wx_state.frame, "Options saved: " ++ File),
-    {reply, ok, {Config, Info, State}};
-
-
-handle_call(pro_refresh, _From, {Config, _Info, State}) ->
-    NewInfo = erltop:update(Config),
-    refresh(NewInfo, State),
-    {reply, ok, {Config, NewInfo, State}};
-
-handle_call({pro_change_node, Node}, _From, {Config, Info, State}) ->
-    Config2 = Config#opts{node = Node},
-    NewInfo = erltop:update(Config2),
-    %wxFrame:setTitle(State#state.frame, "etop: " ++ get_node_name(Config2)),
-    refresh(NewInfo, State),
-    {reply, ok, {Config2, Info, State}};
 
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
@@ -496,28 +549,50 @@ handle_call(Msg, _From, State) ->
 
 
 
-
 %%%%%%%%%%%%%%%%%%%%LOOP%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%% handle_event(#wx{event = #wxClose{},obj = Obj}, {Config, Info, State}) ->  %stänga ner = done
-%%    case State#pro_wx_state.frame of
-%% 	Obj -> 
-%% 	    ?OBS_PRO:stop(),
-%% 	    catch wxWindow:'Destroy'(State#pro_wx_state.frame),
-%% 	    exit(shutdown); %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% osäker här
-%% 	_ ->
-%% 	    {noreply, {Config, Info, State}}
-%%   end;
+handle_event(#wx{id = ?ID_SAVE_OPT, event = #wxCommand{type = command_menu_selected}}, 
+	     {Config, Info, #pro_wx_state{trace_options = Options} = State}) -> 
+    io:format("~p:~p, Klickade på save options~n", [?MODULE, ?LINE]),
+    %% File = 
+    save_options(Options, State#pro_wx_state.process_info),
+    %%wxFrame:setStatusText(State#pro_wx_state.frame, "Options saved: " ++ File),
+    {noreply, {Config, Info, State}};
 
-%% handle_event(#wx{id = ?ID_QUIT}, {Config, Info, State}) ->
-%%     ?OBS_PRO:stop(),
-%%     wxWindow:'Destroy'(State#pro_wx_state.frame), %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% här med
-%%     {noreply, {Config, Info, State}};
+handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->
+    io:format("~p:~p, Klickade på dump to file~n", [?MODULE, ?LINE]),
+    FD  =  wxFileDialog:new(State#pro_wx_state.frame, [{style,?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
+    case wxFileDialog:showModal(FD) of
+	?wxID_OK ->
+	    Path = wxFileDialog:getPath(FD),
+	    io:format("It should Dump to file ~p~n", [Path]);
+	_ -> ok
+    end,
+    {noreply, {Config, Info, State}};
+
+handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+    io:format("~p:~p, Klickade på trace options~n", [?MODULE, ?LINE]),
+    case State#pro_wx_state.options_pid of
+	undefined ->
+	    Pid = erltop_options:start(Options,
+				       State#pro_wx_state.process_info,
+				       State#pro_wx_state.interval,
+				       self()),
+	    {noreply, {Config, Info, State#pro_wx_state{options_pid = Pid}}};
+	_ ->
+	    {noreply, {Config, Info, State}}
+    end;
+
+handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, {Config, _Info, State}) ->
+    io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
+    NewInfo = erltop:update(Config),
+    refresh(NewInfo, State),
+    {noreply, {Config, NewInfo, State}};
 
 handle_event(#wx{id = ?ID_KILL}, {Config, Info, State}) ->
     case State#pro_wx_state.selected of
 	undefined -> ignore;
- 	_ -> exit(State#pro_wx_state.selected, kill) %%%%%%%%%%%%%%%%%%%%%%%%%%%% och här
+ 	_ -> exit(State#pro_wx_state.selected, kill)
      end,
     {noreply, {Config, Info, State}};
 
@@ -526,7 +601,8 @@ handle_event(#wx{id = ?ID_MODULE_INFO,
     erltop_process:module_info_window(Config#opts.node, State#pro_wx_state.selected), %%%%%%% erltop process byt namn
     {noreply, {Config, Info, State}};
 
-handle_event(#wx{id = ?ID_VIEW}, {Config, Info, State}) ->
+handle_event(#wx{id = ?ID_VIEW} = Event, {Config, Info, State}) ->
+    io:format("Event: ~p~n", [Event]),
     #etop_proc_info{cf = {M,_,_}} = lookup_pid(Info, State#pro_wx_state.selected),
     case module_code(M) of
 	no_code ->     ok;
@@ -604,9 +680,16 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated}},
 	    {noreply, {Config,Info,State}}
     end;
 
+
+handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, {Config, Info, State}) ->
+    create_pro_menu(State#pro_wx_state.menubar),
+    {noreply, {Config, Info, State}};
+
 handle_event(Event, State) ->
-    io:format("handle event ~p\n", [Event]),
+    io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
+
+
 
 
 

@@ -336,7 +336,7 @@ loop(State = #state{boxes = Boxes}) ->
 	   ?MODULE:loop(State);
 %%%-----------------------------------------------------------------
 	#wx{id = ?SAVE, event = #wxCommand{type = command_button_clicked}} ->
-	    File = erltop_wxgui:save_options(State#state.trace_options, State#state.process_info),
+	    File = observer_pro_wx:save_options(State#state.trace_options, State#state.process_info),
 	    State#state.parent ! {save, File},
 	    ?MODULE:loop(State);
 %%%-----------------------------------------------------------------
@@ -358,6 +358,7 @@ loop(State = #state{boxes = Boxes}) ->
 		    false ->
 			ignore
 		end,
+
 	    
 	    case Trace#trace_options.to_file of
 		true ->
