@@ -71,8 +71,7 @@ setup(#state{frame = Frame} = State) ->
     
     NodeMenu = case erlang:is_alive() of
 		   true ->
-		       create_menu([#create_menu{id = ?ID_DISCONNECT, text = "&Disconnect"},
-				    #create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
+		       create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
 		   false ->
 		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"},
 				    #create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar)
