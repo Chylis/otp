@@ -14,11 +14,7 @@
 -define(OBS_PRO_WX, observer_pro_wx).
 
 
--define(ID_PING, 2).
--define(ID_DUMP_TO_FILE, 4).
--define(ID_QUIT, 5).
--define(ID_OPTIONS, 9).
--define(ID_DIALOG, 110).
+-define(ID_PING, 1).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -36,6 +32,7 @@
 		  app_panel,
 		  pro_panel,
 		  sys_panel,
+		  node,
 		  nodes
 	}).
 
@@ -84,7 +81,7 @@ setup(#state{frame = Frame} = State) ->
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
     
     %% System Panel
-    SysPanel = ?OBS_SYS_WX:start_link(Notebook, Env, MenuBar),
+    SysPanel = ?OBS_SYS_WX:start_link(Notebook, MenuBar),
     wxNotebook:addPage(Notebook, SysPanel, "System", []),
     
     %% Process Panel
@@ -154,28 +151,19 @@ handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}
 	    Node = list_to_atom(Value),
 	    case net_adm:ping(Node) of
 		pang ->
-		    create_popup_dialog("PANG!", State);
+		    create_popup_dialog("Connect failed", State);
 		pong ->
-		    create_popup_dialog("PONG!", State)
-	    end;
-	_Other ->
-	    ok
+		    change_node_view(Node, State)   
+	    end
     end,
     {noreply, State};
     
 handle_event(#wx{id = Id, event = #wxCommand{type = command_menu_selected}}, State)
   when Id > ?FIRST_NODES_MENU_ID, Id < ?LAST_NODES_MENU_ID ->
-    Node2 = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#state.nodes),
-    io:format("~p:~p, Klickade på nodmeny~n", [?MODULE, ?LINE]),
-    Pid = case check_page_title(State#state.notebook) of
-	      "Processes" ->
-		  wx_object:get_pid(State#state.pro_panel);
-	      "System" ->
-		  wx_object:get_pid(State#state.sys_panel);
-	      _Else ->
-		  ok %do something depending on page
-	  end,
-    Pid ! {node, Node2},
+    
+    Node = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#state.nodes),
+    io:format("~p:~p, Klickade på nod ~p~n", [?MODULE, ?LINE, Node]),
+    change_node_view(Node, State),
     {noreply, State};
 
 handle_event(Event, State) ->
@@ -195,11 +183,6 @@ handle_event(Event, State) ->
 handle_cast(Cast, State) ->
     io:format("~p:~p: Got cast ~p~n", [?MODULE, ?LINE, Cast]),
     {noreply, State}.
-
-handle_call(get_pro_panel, _From, State) ->
-    io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, "get pro panel"]),
-    ProPanel = State#state.pro_panel,
-    {reply, ProPanel, State};
 
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
@@ -225,6 +208,11 @@ code_change(_, _, State) ->
     {stop, not_yet_implemented, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+change_node_view(Node, #state{} = State) ->
+    Pids = [wx_object:get_pid(State#state.pro_panel), wx_object:get_pid(State#state.sys_panel)],
+    lists:foreach(fun(Pid) -> Pid ! {node, Node} end, 
+		  Pids).
 
 check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),

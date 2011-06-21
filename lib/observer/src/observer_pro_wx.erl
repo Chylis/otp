@@ -2,13 +2,20 @@
 
 -behaviour(wx_object).
 
--compile(export_all).
+-export([start_link/4]).
+
+%% wx_object callbacks
+-export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
+	 handle_event/2, handle_cast/2]).
+
+
 
 -include_lib("wx/include/wx.hrl").
 -include_lib("runtime_tools/include/observer_backend.hrl").
 
 %% Defines
 -define(OBS_PRO, erltop).
+-define(OBS, observer_wx).
 
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
@@ -21,17 +28,19 @@
 -define(ID_KILL, 200).
 -define(ID_VIEW, 201).
 -define(ID_PROC, 202).
--define(ID_REFRESH, 3).
--define(ID_DUMP_TO_FILE, 4).
--define(ID_ACCUMULATE, 6).
--define(ID_TRACE, 8).
--define(ID_OPTIONS, 9).
--define(ID_SAVE_OPT, 10).
+-define(ID_REFRESH, 203).
+-define(ID_DUMP_TO_FILE, 204).
+%%%-define(ID_ACCUMULATE, 206).
+-define(ID_TRACE, 208).
+-define(ID_OPTIONS, 209).
+-define(ID_SAVE_OPT, 210).
+-define(ID_MODULE_INFO, 212).
+-define(OK, 211).
+-define(ID_SYSHIDE, 214).
+-define(ID_HIDENEW, 215).
 
--define(ID_MODULE_INFO, 12).
--define(OK, 11).
--define(MAX_PROCINFO_TEXT_LENGTH, 35).
--define(NOTEBOOK, 20).
+%%%-define(MAX_PROCINFO_TEXT_LENGTH, 35).
+%-define(NOTEBOOK, 20).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -101,19 +110,13 @@ init([Notebook, MenuBar, StatusBar]) ->
     Info = ?OBS_PRO:update(Config),
     refresh(Info, State),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
-   % net_kernel:monitor_nodes(true),
     {ProPanel, {Config, Info, State}}.
 
 setup(Notebook, MenuBar, StatusBar) ->
     ProPanel = wxPanel:new(Notebook, []),
     Menu = create_popup_menu(),
     Grid = create_list_box(ProPanel),
-    NodeSizer = create_node_info_ui(ProPanel),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
-    wxSizer:addSpacer(Sizer, 10),
-    
-    wxSizer:add(Sizer, NodeSizer, [{proportion, 0}]),
-    wxSizer:addSpacer(Sizer, 10),
     wxSizer:add(Sizer, Grid, [{flag, ?wxEXPAND bor ?wxALL},
 			      {proportion, 1},
 			      {border,4}]),
@@ -173,7 +176,9 @@ create_pro_menu(MenuBar) ->
 		 #create_menu{id = ?ID_OPTIONS, text = "&Options"},
 		 #create_menu{id = ?ID_SAVE_OPT, text = "&Save options..."}],
 		"&Options", MenuBar),
-    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}],
+    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}, 
+		 #create_menu{id = ?ID_SYSHIDE, text = "&Hide system processes"}, %TA HAND OM EVENTS
+		 #create_menu{id = ?ID_HIDENEW, text = "&Auto-hide new"}],
 		"View", MenuBar).
 
 clear_menu_bar(MenuBar) ->
@@ -187,14 +192,14 @@ remove_menu_item(MenuBar, Item) ->
     remove_menu_item(MenuBar, Item-1).
 
 
-create_node_info_ui(Panel) ->
-    Sizer  = wxBoxSizer:new(?wxVERTICAL),
-    create_check_box(Panel, Sizer, ?wxID_ANY, "Hide system processes"),
-    create_check_box(Panel, Sizer, ?wxID_ANY, "Auto-hide new"),
-    Text1 = wxStaticText:new(Panel, ?wxID_ANY, "# Hidden: ", []),
-    wxSizer:addSpacer(Sizer, 10),
-    wxSizer:add(Sizer, Text1, [{flag, ?wxLEFT}, {border, 10}]),
-    Sizer.
+%%%%% create_node_info_ui(Panel) ->
+%%%%%     Sizer  = wxBoxSizer:new(?wxVERTICAL),
+%%%%%     create_check_box(Panel, Sizer, ?wxID_ANY, "Hide system processes"),
+%%%%%     create_check_box(Panel, Sizer, ?wxID_ANY, "Auto-hide new"),
+%%%%%     Text1 = wxStaticText:new(Panel, ?wxID_ANY, "# Hidden: ", []),
+%%%%%     wxSizer:addSpacer(Sizer, 10),
+%%%%%     wxSizer:add(Sizer, Text1, [{flag, ?wxLEFT}, {border, 10}]),
+%%%%%     Sizer.
 
 
 create_popup_menu() ->
@@ -254,26 +259,26 @@ create_list_box(Frame) ->
 %%    wxListCtrl:connect(ListCtrl, grid_cell_left_click),
 
 
-create_check_box(Frame, Sizer, Id, Text) ->
-    ChkBox = wxCheckBox:new(Frame, Id, Text, []),
-    wxSizer:add(Sizer, ChkBox, [{flag, ?wxLEFT}, {border, 10}]),
-    ChkBox.
+%% create_check_box(Frame, Sizer, Id, Text) ->
+%%     ChkBox = wxCheckBox:new(Frame, Id, Text, []),
+%%     wxSizer:add(Sizer, ChkBox, [{flag, ?wxLEFT}, {border, 10}]),
+%%     ChkBox.
 
 
-create_box(Frame, BoxTitle, Values, NoCols) ->
-    Box   = wxStaticBoxSizer:new(?wxHORIZONTAL, Frame, [{label, BoxTitle}]),
-    Sizer = wxFlexGridSizer:new(3 * NoCols, [{vgap, 3}, {hgap, 3}]),
-    AllV  = lists:map(fun({Title, Value}) ->
-			      TitleLabel = wxStaticText:new(Frame, ?wxID_ANY, Title ++ " :"),
-			      wxSizer:add(Sizer, TitleLabel, [{flag, ?wxALIGN_RIGHT}]),
-			      ValueLabel = wxStaticText:new(Frame, ?wxID_ANY, Value),
-			      wxSizer:add(Sizer, ValueLabel, [{flag, ?wxALIGN_RIGHT}]),
-			      wxSizer:addSpacer(Sizer, 10),
-			      ValueLabel
-		      end, Values),
-    wxSizer:add(Box, Sizer),
-    wxStaticBox:fit(wxStaticBoxSizer:getStaticBox(Box)),
-    {AllV, Box}.
+%% create_box(Frame, BoxTitle, Values, NoCols) ->
+%%     Box   = wxStaticBoxSizer:new(?wxHORIZONTAL, Frame, [{label, BoxTitle}]),
+%%     Sizer = wxFlexGridSizer:new(3 * NoCols, [{vgap, 3}, {hgap, 3}]),
+%%     AllV  = lists:map(fun({Title, Value}) ->
+%% 			      TitleLabel = wxStaticText:new(Frame, ?wxID_ANY, Title ++ " :"),
+%% 			      wxSizer:add(Sizer, TitleLabel, [{flag, ?wxALIGN_RIGHT}]),
+%% 			      ValueLabel = wxStaticText:new(Frame, ?wxID_ANY, Value),
+%% 			      wxSizer:add(Sizer, ValueLabel, [{flag, ?wxALIGN_RIGHT}]),
+%% 			      wxSizer:addSpacer(Sizer, 10),
+%% 			      ValueLabel
+%% 		      end, Values),
+%%     wxSizer:add(Box, Sizer),
+%%     wxStaticBox:fit(wxStaticBoxSizer:getStaticBox(Box)),
+%%     {AllV, Box}.
 
 create_menu(MenuItems, Name, MenuBar) ->
     Menu = wxMenu:new(),
@@ -365,8 +370,8 @@ save_options(#trace_options{send = Send,
     File.
 
 
-get_node_name(Config) ->
-    atom_to_list(erltop:getopt(node, Config)).
+%% get_node_name(Config) ->
+%%     atom_to_list(erltop:getopt(node, Config)).
 
 lookup_pid(#etop_info{procinfo = ProcInfo}, Pid) ->
     [Ret] = lists:filter(fun(#etop_proc_info{pid = Pid2}) ->
@@ -473,25 +478,27 @@ to_str(No) when is_integer(No) ->
 to_str(ShouldNotGetHere) ->
     erlang:error({?MODULE, to_str, ShouldNotGetHere}).
 
+update_propage(Config, State) ->
+    NewInfo = erltop:update(Config),
+    refresh(NewInfo, State),
+    NewInfo.	
 
-get_nodes() ->
-    Nodes = [node()| nodes()],
-    {_, Menues} =
-	lists:foldl(fun(Node, {Id, Acc}) when Id < ?LAST_NODES_MENU_ID ->
-			    {Id + 1, [#create_menu{id = Id + ?FIRST_NODES_MENU_ID, 
-						   text =  atom_to_list(Node)} | Acc]} 
-		    end,
-		    {1, []},
-		    Nodes),
-    {Nodes, lists:reverse(Menues)}.
+%% get_nodes() ->
+%%     Nodes = [node()| nodes()],
+%%     {_, Menues} =
+%% 	lists:foldl(fun(Node, {Id, Acc}) when Id < ?LAST_NODES_MENU_ID ->
+%% 			    {Id + 1, [#create_menu{id = Id + ?FIRST_NODES_MENU_ID, 
+%% 						   text =  atom_to_list(Node)} | Acc]} 
+%% 		    end,
+%% 		    {1, []},
+%% 		    Nodes),
+%%     {Nodes, lists:reverse(Menues)}.
 
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_info(time_to_update, {Config, _Info, State}) ->
-    NewInfo = erltop:update(Config),
-    refresh(NewInfo, State),
-    %%wxFrame:setStatusText(State#pro_wx_state.frame, ""),
+    NewInfo = update_propage(Config, State),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {noreply, {Config, NewInfo, State}};
 
@@ -522,13 +529,11 @@ handle_info({'EXIT', Pid, Reason}, {Config, Info, State}) ->
 	    {noreply, {Config, Info, State}}
     end;
 
-handle_info({node, Node}, {Config, Info, State}) ->
+handle_info({node, Node}, {Config, _Info, State}) ->
     Config2 = Config#opts{node = Node},
-    NewInfo = erltop:update(Config2),
+    NewInfo = update_propage(Config2, State),
     %%wxFrame:setTitle(State#state.frame, "etop: " ++ get_node_name(Config2)),
-    refresh(NewInfo, State),
-    {noreply, {Config2, Info, State}};
-
+    {noreply, {Config2, NewInfo, State}};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -548,6 +553,9 @@ handle_call(Msg, _From, State) ->
     {reply, ok, State}.
 
 
+handle_cast(Msg, State) ->
+    io:format("~p ~p: Unhandled cast ~p~n", [?MODULE, ?LINE, Msg]),
+    {noreply, State}.
 
 %%%%%%%%%%%%%%%%%%%%LOOP%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -585,8 +593,7 @@ handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options =
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, {Config, _Info, State}) ->
     io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
-    NewInfo = erltop:update(Config),
-    refresh(NewInfo, State),
+    NewInfo = update_propage(Config, State),
     {noreply, {Config, NewInfo, State}};
 
 handle_event(#wx{id = ?ID_KILL}, {Config, Info, State}) ->
@@ -681,9 +688,10 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated}},
     end;
 
 
-handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, {Config, Info, State}) ->
+handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, {Config, _Info, State}) ->
     create_pro_menu(State#pro_wx_state.menubar),
-    {noreply, {Config, Info, State}};
+    NewInfo = update_propage(Config, State),
+    {noreply, {Config, NewInfo, State}};
 
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),

@@ -2,10 +2,10 @@
 
 -behaviour(wx_object).
 
--export([start_link/3]).
+-export([start_link/2]).
 %% wx_object callbacks
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
-	 handle_event/2]).
+	 handle_event/2, handle_cast/2]).
 
 -include_lib("wx/include/wx.hrl").
 
@@ -13,7 +13,7 @@
 -define(OBS_SYS_LOGIC, observer_sys).
 -define(OBS, observer_wx).
 
--define(ID_REFRESH, 3).
+-define(ID_REFRESH, 103).
 
 
 %% Records
@@ -43,8 +43,7 @@
 	 check = true
 	}).
 
-start_link(Notebook, Env, MenuBar) ->
-    wx:set_env(Env),
+start_link(Notebook, MenuBar) ->
     wx_object:start_link(?MODULE, [Notebook, MenuBar], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -129,12 +128,11 @@ init([Notebook, MenuBar]) ->
       binary_alloc = BinaryAllocTxt,
       code_alloc = CodeAllocTxt,
       ets_alloc = EtsAllocTxt,
-      node = node()
-     },
-    
+      node = node()},
+      
     wxPanel:setSizer(SysPanel, SysSizer),
     create_sys_menu(MenuBar),
-    erlang:send_after(3000, self(), {update, Notebook}),
+    erlang:send_after(3000, self(), update),
     {SysPanel, SysPanelState}.
 
 get_syspage_info(Node) ->
@@ -241,9 +239,9 @@ update_info_label(Node, Name, WxText) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_info({update, Notebook}, State) ->
-    update_syspage(Notebook, State),
-    erlang:send_after(3000, self(), {update, Notebook}),
+handle_info(update, State) ->
+    update_syspage(State#sys_wx_state.parent_notebook, State),
+    erlang:send_after(3000, self(), update),
     {noreply, State};
 
 handle_info({node, Node}, State) ->
@@ -266,12 +264,17 @@ handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
 
+handle_cast(Msg, State) ->
+    io:format("~p~p: Unhandled cast ~p~n",[?MODULE, ?LINE, Msg]),
+    {noreply, State}.
+
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, State) ->
     io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
     update_syspage(State#sys_wx_state.parent_notebook, State),
     {noreply, State};
 
 handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, State) ->
+    update_syspage(State#sys_wx_state.parent_notebook, State),
     create_sys_menu(State#sys_wx_state.menubar),
     {noreply, State};
 
