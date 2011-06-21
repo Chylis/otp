@@ -16,7 +16,6 @@
 
 -define(ID_PING, 1).
 -define(ID_CONNECT, 2).
--define(ID_DISCONNECT, 3).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -77,10 +76,12 @@ setup(#state{frame = Frame} = State) ->
 				    #create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar)
 	       end,
     
-    wxFrame:setMenuBar(Frame, MenuBar),
 
-    %% Setup Statusbar
+
+    wxFrame:setMenuBar(Frame, MenuBar),
     StatusBar = wxFrame:createStatusBar(Frame, []),
+    wxFrame:setTitle(Frame, atom_to_list(node())),
+    wxStatusBar:setStatusText(StatusBar, atom_to_list(node())),
     
     %% Setup panels
     Panel = wxPanel:new(Frame, []),
@@ -246,6 +247,10 @@ change_node_view(Node, #state{} = State) ->
     Pids = [wx_object:get_pid(State#state.pro_panel), wx_object:get_pid(State#state.sys_panel)],
     lists:foreach(fun(Pid) -> Pid ! {node, Node} end, 
 		  Pids),
+    StatusText = ["Observer - " | atom_to_list(Node)],
+    io:format("Efter..."),
+    wxFrame:setTitle(State#state.frame, StatusText),
+    wxStatusBar:setStatusText(State#state.status_bar, StatusText),
     State#state{node = Node}.
 
 check_page_title(Notebook) ->
