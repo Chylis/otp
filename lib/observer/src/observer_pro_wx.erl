@@ -81,7 +81,6 @@
 		       hide_system,
 		       hide_modules,
 		       hide_pids,
-		       node_label,
 		       nodes}).
 
 -record(opts, {node=node(), port = 8415, accum = false, intv = 5000, lines = 30, 
@@ -118,10 +117,6 @@ setup(Notebook, MenuBar, StatusBar) ->
     Menu = create_popup_menu(),
     Grid = create_list_box(ProPanel),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
-    NodeSizer = wxStaticBoxSizer:new(?wxHORIZONTAL, ProPanel, [{label, "Node:"}]),
-    NodeLabel = wxStaticText:new(ProPanel, ?wxID_ANY, atom_to_list(node())), %%atom to list
-    wxSizer:add(Sizer, NodeSizer, [{flag, ?wxEXPAND}]),
-    wxSizer:add(NodeSizer, NodeLabel),
     wxSizer:add(Sizer, Grid, [{flag, ?wxEXPAND bor ?wxALL},
 			      {proportion, 1},
 			      {border,4}]),
@@ -171,7 +166,6 @@ setup(Notebook, MenuBar, StatusBar) ->
 			   menubar = MenuBar,
 			   statusbar = StatusBar,
 			   interval = Interval,
-			   node_label = NodeLabel,
 			   nodes    = [node() | nodes()]}, %temporary nodes...!
     {ProPanel, State}.
 %% UI-creation
@@ -219,9 +213,6 @@ create_popup_menu() ->
     wxMenu:connect(PopupMenu, command_menu_selected),
 
     PopupMenu.
-
-
-
 
 
 create_list_box(Frame) ->
@@ -495,8 +486,6 @@ to_str(ShouldNotGetHere) ->
 update_propage(Config, State) ->
     NewInfo = erltop:update(Config),
     refresh(NewInfo, State),
-    Node = Config#opts.node,
-    wxStaticText:setLabel(State#pro_wx_state.node_label, atom_to_list(Node)),
     NewInfo.	
 
 %% get_nodes() ->
