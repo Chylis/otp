@@ -72,8 +72,7 @@ setup(#state{frame = Frame} = State) ->
 		   true ->
 		       create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
 		   false ->
-		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"},
-				    #create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar)
+		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"} | NodesMenuItems], "Nodes", MenuBar)
 	       end,
     
 
@@ -176,7 +175,7 @@ handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}
 		       Node = list_to_atom(Value),
 		       case net_adm:ping(Node) of
 			   pang ->
-			       create_popup_dialog("Connect failed", State),
+			       create_popup_dialog("Connect failed", "Pang", State),
 			       State;
 			   pong ->
 			       change_node_view(Node, State)
@@ -227,7 +226,7 @@ handle_info({nodedown, Node}, State) ->
 	     end,
     State3 = update_node_list(State2),
     Msg = ["Node down: " | atom_to_list(Node)],
-    create_popup_dialog(Msg, State3),
+    create_popup_dialog(Msg, "Node down", State3),
     {noreply, State3};
 
 handle_info(Info, State) ->
@@ -248,7 +247,6 @@ change_node_view(Node, #state{} = State) ->
     lists:foreach(fun(Pid) -> Pid ! {node, Node} end, 
 		  Pids),
     StatusText = ["Observer - " | atom_to_list(Node)],
-    io:format("Efter..."),
     wxFrame:setTitle(State#state.frame, StatusText),
     wxStatusBar:setStatusText(State#state.status_bar, StatusText),
     State#state{node = Node}.
@@ -274,8 +272,9 @@ create_connect_dialog(connect, #state{frame = Frame}) ->
 	    cancel
     end.
 
-create_popup_dialog(Msg, #state{frame = Frame}) ->
+create_popup_dialog(Msg, Title, #state{frame = Frame}) ->
     Popup = wxMessageDialog:new(Frame, Msg),
+    wxMessageDialog:setTitle(Popup, Title),
     wxDialog:showModal(Popup).
 
 create_menu(MenuItems, Name, MenuBar) ->
@@ -317,8 +316,13 @@ update_node_list(State) ->
 		  end,
 		  wxMenu:getMenuItems(State#state.node_menu)),
     
-    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu),
-
+    case erlang:is_alive() of
+	true ->
+	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu);
+	false ->
+	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Connect"}, State#state.node_menu)
+    end,
+    
     lists:foreach(fun(Record) ->
 			  create_menu_item(Record, State#state.node_menu)
 		  end,
