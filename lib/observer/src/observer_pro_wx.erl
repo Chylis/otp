@@ -220,6 +220,10 @@ create_popup_menu() ->
 
     PopupMenu.
 
+
+
+
+
 create_list_box(Frame) ->
     ListCtrl = wxListCtrl:new(Frame, [{style, ?wxLC_REPORT bor ?wxLC_SINGLE_SEL 
 					   bor ?wxLC_HRULES },
@@ -318,6 +322,10 @@ update_grid(Grid, {Sort,Dir}, ProcInfo0) ->
 	fun(#etop_proc_info{pid = Pid,mem = Mem, reds = Reds,name = Name,
 			    runtime = RunTime,cf = CF,mq = MQ}, Row) ->
 		wxListCtrl:insertItem(Grid, Row, ""),
+		if (Row rem 2) =:= 0 ->
+			wxListCtrl:setItemBackgroundColour(Grid, Row, {240,240,255});
+		   true -> ignore
+		end,
 		lists:foreach(fun({Col, Val}) -> 
 				      wxListCtrl:setItem(Grid, Row, Col, to_str(Val))
 			      end,
