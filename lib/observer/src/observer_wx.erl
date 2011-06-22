@@ -31,6 +31,7 @@
 		  main_panel,
 		  app_panel,
 		  pro_panel,
+		  tv_panel,
 		  sys_panel,
 		  node,
 		  nodes
@@ -89,8 +90,12 @@ setup(#state{frame = Frame} = State) ->
     wxNotebook:addPage(Notebook, ProPanel, "Processes", []),
    
     %% Application Panel
-    AppPanel = wxPanel:new(Notebook, []),
-    wxNotebook:addPage(Notebook, AppPanel, "Applications", []),
+    %AppPanel = wxPanel:new(Notebook, []),
+    %wxNotebook:addPage(Notebook, AppPanel, "Applications", []),
+
+    %% Table Viewer Panel
+    TVPanel = observer_tv_wx:start_link(Notebook, MenuBar, StatusBar),
+    wxNotebook:addPage(Notebook, TVPanel, "Table Viewer", []),
     
     wxSizer:add(MainSizer, Notebook, [{proportion, 1}, {flag, ?wxEXPAND}]),
     wxPanel:setSizer(Panel, MainSizer),
@@ -108,7 +113,8 @@ setup(#state{frame = Frame} = State) ->
 			   status_bar = StatusBar,
 			   sys_panel = SysPanel,
 			   pro_panel = ProPanel,
-			   app_panel = AppPanel,
+			   tv_panel  = TVPanel,
+%%			   app_panel = AppPanel,
 			   nodes = Nodes
 			  },
     UpdState.
@@ -125,7 +131,9 @@ handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_pag
 		  wx_object:get_pid(State#state.app_panel);
 	      "System" ->
 		  wx_object:get_pid(State#state.sys_panel);
-	_Other ->
+	      "Table Viewer" ->
+		  wx_object:get_pid(State#state.tv_panel);
+	      _Other ->
 		  ok
 	  end,
     Pid ! Event,
