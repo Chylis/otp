@@ -167,16 +167,19 @@ handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_select
     UpdState = case create_connect_dialog(connect, State) of
 		   cancel ->
 		       State;
-		   {value, [], _Integer} ->
+		   {value, [], _, _} ->
 		       State;
-		   {value, NodeName, 0} when is_list(NodeName) -> % 0 = Short name
-		       net_kernel:start([erlang:list_to_atom(NodeName), shortnames]),
+		   {value, NodeName, 0, Cookie} -> %Shortname,
+		       net_kernel:start([list_to_atom(NodeName), shortnames]),
+		       erlang:set_cookie(node(), list_to_atom(Cookie)),
 		       change_node_view(node(), State);
-		   {value, NodeName, 1} when is_list(NodeName) -> % 1 = Long name
-		       %% felhantering, cookie, hidden?
-		       net_kernel:start([erlang:list_to_atom(NodeName), longnames]),
+		   {value, NodeName, 1, Cookie} -> %Longname
+		       net_kernel:start([list_to_atom(NodeName), longnames]),
+		       erlang:set_cookie(node(), list_to_atom(Cookie)),
 		       change_node_view(node(), State)
+		       %% felhantering, cookie
 	       end,
+    io:format("~p~n", [erlang:get_cookie()]),
     {noreply, UpdState};
 
 handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}}, State) ->
@@ -285,13 +288,11 @@ create_connect_dialog(ping, #state{frame = Frame}) ->
 	    cancel
     end;
 create_connect_dialog(connect, #state{frame = Frame}) ->
-    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Distribute node ", [{size, {210, 210}}]),
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Distribute node ", [{size, {210, 200}}]),
 
     VSizer = wxBoxSizer:new(?wxVERTICAL),
     RadioBoxSizer = wxBoxSizer:new(?wxHORIZONTAL),
-    TxtSizer = wxBoxSizer:new(?wxVERTICAL),
-    BtnSizer = wxBoxSizer:new(?wxHORIZONTAL),
-
+                
     Choices = ["Short name", "Long name"],
     RadioBox = wxRadioBox:new(Dialog, 1, "",
 			      ?wxDefaultPosition,
@@ -299,30 +300,35 @@ create_connect_dialog(connect, #state{frame = Frame}) ->
 			      Choices,
 			      [{majorDim, 2},
 			       {style, ?wxHORIZONTAL}]),
-    Text = wxStaticText:new(Dialog, ?wxID_ANY, "Node name: "),
-    TextCtrl = wxTextCtrl:new(Dialog, 1, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
-
-    OkBtn = wxButton:new(Dialog, ?wxID_OK, [{label, "OK"}]),
-    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL, [{label, "Cancel"}]),
-
-   %% wxRadioBox:connect(RadioBox, command_radiobox_selected),
-    wxSizer:add(VSizer, RadioBoxSizer, [{flag, ?wxALIGN_CENTER}]),
+       
+    NameText = wxStaticText:new(Dialog, ?wxID_ANY, "Node name: "),
+    NameCtrl = wxTextCtrl:new(Dialog, ?wxID_ANY, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
+    wxTextCtrl:setValue(NameCtrl, "Observer"),
+    CookieText = wxStaticText:new(Dialog, ?wxID_ANY, "Secret cookie: "),
+    CookieCtrl = wxTextCtrl:new(Dialog, ?wxID_ANY, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
+    
+    BtnSizer = wxDialog:createButtonSizer(Dialog, ?wxID_DEFAULT),
+    
     wxSizer:add(RadioBoxSizer, RadioBox),
-    wxSizer:addSpacer(VSizer, 25),
-    wxSizer:add(VSizer, TxtSizer, [{flag, ?wxALIGN_CENTER}]),
-    wxSizer:add(TxtSizer, Text),
-    wxSizer:add(TxtSizer, TextCtrl),
-    wxSizer:addSpacer(VSizer, 45),
-    wxSizer:add(VSizer, BtnSizer, [{flag, ?wxALIGN_CENTER}]),
-    wxSizer:add(BtnSizer, CancelBtn),
-    wxSizer:add(BtnSizer, OkBtn),
+   
+    wxSizer:add(VSizer, RadioBoxSizer), %Radiobox
+    wxSizer:addSpacer(VSizer, 10),
+    wxSizer:add(VSizer, NameText), %Nodename text
+    wxSizer:add(VSizer, NameCtrl), %Nodename ctrlist
+    wxSizer:addSpacer(VSizer, 10),
+    wxSizer:add(VSizer, CookieText),
+    wxSizer:add(VSizer, CookieCtrl),
+    wxSizer:addSpacer(VSizer, 10),
+    wxSizer:add(VSizer, BtnSizer),
+
     wxWindow:setSizer(Dialog, VSizer),
 
     case wxDialog:showModal(Dialog) of
 	?wxID_OK ->
-	    TxtValue = wxTextCtrl:getValue(TextCtrl),
-	    BtnValue = wxRadioBox:getSelection(RadioBox),
-	    {value, TxtValue, BtnValue};
+	    NameValue = wxTextCtrl:getValue(NameCtrl),
+	    NameLngthValue = wxRadioBox:getSelection(RadioBox),
+	    CookieValue = wxTextCtrl:getValue(CookieCtrl),
+	    {value, NameValue, NameLngthValue, CookieValue};
 	?wxID_CANCEL ->
 	    cancel
     end.
@@ -367,7 +373,6 @@ merge_menus(Default = [{"Nodes", _}|_], TabMenus) ->
     TabMenus ++ Default.
 
 create_menu(Menus, MenuBar) ->
-    io:format("Menus ~p~n",[Menus]),
     Add = fun({Name, MenuItems}) ->
 		  Menu = wxMenu:new(),
 		  lists:foreach(fun(Record) ->
