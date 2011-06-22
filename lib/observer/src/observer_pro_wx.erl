@@ -1,8 +1,25 @@
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2011. All Rights Reserved.
+%%
+%% The contents of this file are subject to the Erlang Public License,
+%% Version 1.1, (the "License"); you may not use this file except in
+%% compliance with the License. You should have received a copy of the
+%% Erlang Public License along with this software. If not, it can be
+%% retrieved online at http://www.erlang.org/.
+%%
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+%% the License for the specific language governing rights and limitations
+%% under the License.
+%%
+%% %CopyrightEnd%
 -module(observer_pro_wx).
 
 -behaviour(wx_object).
 
--export([start_link/4]).
+-export([start_link/2]).
 
 %% wx_object callbacks
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
@@ -13,9 +30,10 @@
 -include_lib("wx/include/wx.hrl").
 -include_lib("runtime_tools/include/observer_backend.hrl").
 
+-include("observer_defs.hrl").
+
 %% Defines
 -define(OBS_PRO, erltop).
--define(OBS, observer_wx).
 
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
@@ -62,14 +80,14 @@
 			main_window  = true}).
 
 
--record(pro_wx_state, {code_frame, 
+-record(pro_wx_state, {parent,
+		       code_frame,
 		       code_view, 
 		       proc_frame, 
 		       popup_menu, 
 		       grid, 
 		       selected, 
 		       frame,
-		       menubar,
 		       parent_notebook,
 		       sort_order = {#etop_proc_info.reds, decr},
 		       panel, trace_options = #trace_options{},
@@ -77,7 +95,6 @@
 		       opened = [],
 		       process_info,
 		       interval,
-		       statusbar,
 		       hide_system,
 		       hide_modules,
 		       hide_pids,
@@ -89,30 +106,21 @@
 	       out_mod=erltop:output(graphical), out_proc, server, host, tracer, store, 
 	       accum_tab, remote}).
 
--record(create_menu, 
-	{id,
-	 text,
-	 type = append,
-	 check = true
-	}).
-
-
-start_link(Notebook, Env, MenuBar, StatusBar) ->
-    wx:set_env(Env),
-    wx_object:start_link(?MODULE, [Notebook, MenuBar, StatusBar], []).
+start_link(Notebook, Parent) ->
+    wx_object:start_link(?MODULE, [Notebook, Parent], []).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-init([Notebook, MenuBar, StatusBar]) ->
+init([Notebook, Parent]) ->
     process_flag(trap_exit, true),
     Config = ?OBS_PRO:start(self()),
-    {ProPanel, State} = setup(Notebook, MenuBar, StatusBar),
+    {ProPanel, State} = setup(Notebook, Parent),
     Info = ?OBS_PRO:update(Config),
     refresh(Info, State),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {ProPanel, {Config, Info, State}}.
 
-setup(Notebook, MenuBar, StatusBar) ->
+setup(Notebook, Parent) ->
     ProPanel = wxPanel:new(Notebook, []),
     Menu = create_popup_menu(),
     Grid = create_list_box(ProPanel),
@@ -157,50 +165,28 @@ setup(Notebook, MenuBar, StatusBar) ->
 		Other
 	end,
     
-    State =  #pro_wx_state{popup_menu  = Menu,
+    State =  #pro_wx_state{parent = Parent,
+			   popup_menu  = Menu,
 			   grid        = Grid,
 			   frame       = ProPanel,
 			   parent_notebook = Notebook,
 			   trace_options = Opt,
 			   process_info = ProcessInfo2,
-			   menubar = MenuBar,
-			   statusbar = StatusBar,
 			   interval = Interval,
 			   nodes    = [node() | nodes()]}, %temporary nodes...!
     {ProPanel, State}.
 %% UI-creation
 
-create_pro_menu(MenuBar) ->
-    clear_menu_bar(MenuBar),
-    create_menu([#create_menu{id = ?ID_DUMP_TO_FILE, text = "&Dump to file"},
-		 #create_menu{id = ?ID_OPTIONS, text = "&Options"},
-		 #create_menu{id = ?ID_SAVE_OPT, text = "&Save options..."}],
-		"&Options", MenuBar),
-    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}, 
-		 #create_menu{id = ?ID_SYSHIDE, text = "&Hide system processes"}, %TA HAND OM EVENTS
-		 #create_menu{id = ?ID_HIDENEW, text = "&Auto-hide new"}],
-		"View", MenuBar).
-
-clear_menu_bar(MenuBar) ->
-    Count = wxMenuBar:getMenuCount(MenuBar),
-    remove_menu_item(MenuBar, Count).
-
-remove_menu_item(_MenuBar, 2) ->
-    ok;
-remove_menu_item(MenuBar, Item) ->
-    wxMenuBar:remove(MenuBar, Item),
-    remove_menu_item(MenuBar, Item-1).
-
-
-%%%%% create_node_info_ui(Panel) ->
-%%%%%     Sizer  = wxBoxSizer:new(?wxVERTICAL),
-%%%%%     create_check_box(Panel, Sizer, ?wxID_ANY, "Hide system processes"),
-%%%%%     create_check_box(Panel, Sizer, ?wxID_ANY, "Auto-hide new"),
-%%%%%     Text1 = wxStaticText:new(Panel, ?wxID_ANY, "# Hidden: ", []),
-%%%%%     wxSizer:addSpacer(Sizer, 10),
-%%%%%     wxSizer:add(Sizer, Text1, [{flag, ?wxLEFT}, {border, 10}]),
-%%%%%     Sizer.
-
+create_pro_menu(Parent) ->
+    MenuEntries = [{"View",
+		    [#create_menu{id = ?ID_REFRESH, text = "&Refresh"},
+		     #create_menu{id = ?ID_SYSHIDE, text = "&Hide system processes"},
+		     #create_menu{id = ?ID_HIDENEW, text = "&Auto-hide new"}]},
+		   {"&Options",
+		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "&Dump to file"},
+		     #create_menu{id = ?ID_OPTIONS, text = "&Options"},
+		     #create_menu{id = ?ID_SAVE_OPT, text = "&Save options..."}]}],
+    observer_wx:create_menus(Parent, MenuEntries).
 
 create_popup_menu() ->
     PopupMenu = wxMenu:new(),
@@ -258,49 +244,6 @@ create_list_box(Frame) ->
 
     ListCtrl.
 %%    wxListCtrl:connect(ListCtrl, grid_cell_left_click),
-
-
-%% create_check_box(Frame, Sizer, Id, Text) ->
-%%     ChkBox = wxCheckBox:new(Frame, Id, Text, []),
-%%     wxSizer:add(Sizer, ChkBox, [{flag, ?wxLEFT}, {border, 10}]),
-%%     ChkBox.
-
-
-%% create_box(Frame, BoxTitle, Values, NoCols) ->
-%%     Box   = wxStaticBoxSizer:new(?wxHORIZONTAL, Frame, [{label, BoxTitle}]),
-%%     Sizer = wxFlexGridSizer:new(3 * NoCols, [{vgap, 3}, {hgap, 3}]),
-%%     AllV  = lists:map(fun({Title, Value}) ->
-%% 			      TitleLabel = wxStaticText:new(Frame, ?wxID_ANY, Title ++ " :"),
-%% 			      wxSizer:add(Sizer, TitleLabel, [{flag, ?wxALIGN_RIGHT}]),
-%% 			      ValueLabel = wxStaticText:new(Frame, ?wxID_ANY, Value),
-%% 			      wxSizer:add(Sizer, ValueLabel, [{flag, ?wxALIGN_RIGHT}]),
-%% 			      wxSizer:addSpacer(Sizer, 10),
-%% 			      ValueLabel
-%% 		      end, Values),
-%%     wxSizer:add(Box, Sizer),
-%%     wxStaticBox:fit(wxStaticBoxSizer:getStaticBox(Box)),
-%%     {AllV, Box}.
-
-create_menu(MenuItems, Name, MenuBar) ->
-    Menu = wxMenu:new(),
-    lists:foreach(fun(Record) ->
-			  create_menu_item(Record, Menu)
-		  end,
-		  MenuItems),
-    wxMenuBar:append(MenuBar, Menu, Name),
-    Menu.
-
-create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check}, Menu) ->
-    case Type of
-	append ->
-	    wxMenu:append(Menu, Id, Text);
-	appendCheck ->
-	    wxMenu:appendCheckItem(Menu, Id, Text),
-	    wxMenu:check(Menu, Id, Check);
-	separator ->
-	    wxMenu:appendSeparator(Menu)
-    end.
-
 
 refresh(Info,#pro_wx_state{grid = Grid, sort_order = Sort}) ->
     wx:batch(fun() -> update_grid(Grid, Sort, Info#etop_info.procinfo) end).
@@ -517,6 +460,11 @@ handle_info({save, File}, State) ->
     wxFrame:setStatusText(State#pro_wx_state.frame, "Options saved: " ++ File),
     {noreply, State};
 
+handle_info({active, Node}, {Config, _Info, State}) ->
+    create_pro_menu(State#pro_wx_state.parent),
+    NewInfo = update_propage(Config, State),
+    {noreply, {Config, NewInfo, State}};
+
 handle_info({config, _Changed, NewConfig}, {_Config, Info, State}) ->
     {noreply, {NewConfig, Info, State}};
 
@@ -691,12 +639,6 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated}},
 	    io:format("Already open\n", []),
 	    {noreply, {Config,Info,State}}
     end;
-
-
-handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, {Config, _Info, State}) ->
-    create_pro_menu(State#pro_wx_state.menubar),
-    NewInfo = update_propage(Config, State),
-    {noreply, {Config, NewInfo, State}};
 
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),

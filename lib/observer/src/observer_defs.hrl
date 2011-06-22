@@ -1,35 +1,30 @@
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2011. All Rights Reserved.
+%%
+%% The contents of this file are subject to the Erlang Public License,
+%% Version 1.1, (the "License"); you may not use this file except in
+%% compliance with the License. You should have received a copy of the
+%% Erlang Public License along with this software. If not, it can be
+%% retrieved online at http://www.erlang.org/.
+%%
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+%% the License for the specific language governing rights and limitations
+%% under the License.
+%%
+%% %CopyrightEnd%
+
 -define(OBS, observer_wx).
 -define(OBS_SYS_LOGIC, observer_sys).
 -define(OBS_SYS_WX, observer_sys_wx).
+-define(OBS_PRO_WX, observer_pro_wx).
 
--record(state,
-	{
-	  name,
-	  ref,
-	  parent,
-	  children,
-	  node_name,
-	  known_nodes
+
+-record(create_menu,
+	{id,
+	 text,
+	 type = append,
+	 check = true
 	}).
-
--record(obj,
-	{
-	  name,
-	  parent,
-	  children,
-	  ref
-	}).
-
--record(node_info, {node_name,
-		    no_procs, % number of processes
-		    no_cpu, % number of logical cpu's
-		    no_cpu_available, %number of logical cpu's available
-		    no_cpu_online, % number of logical cpu's online
-		    tot_alloc, % total memory allocated
-		    proc_used, % memory used by processes
-		    proc_alloc, % memory alloc by processes,
-		    atom_used, % memory used by atoms
-		    atom_alloc, % memory allocated by atoms
-		    binary_alloc, % memory allocated for binaries
-		    code_alloc, % memory allocated by code
-		    ets_alloc}).% memory allocated by ets

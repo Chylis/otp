@@ -1,18 +1,34 @@
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2011. All Rights Reserved.
+%%
+%% The contents of this file are subject to the Erlang Public License,
+%% Version 1.1, (the "License"); you may not use this file except in
+%% compliance with the License. You should have received a copy of the
+%% Erlang Public License along with this software. If not, it can be
+%% retrieved online at http://www.erlang.org/.
+%%
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+%% the License for the specific language governing rights and limitations
+%% under the License.
+%%
+%% %CopyrightEnd%
 -module(observer_wx).
 
 -behaviour(wx_object).
 
--export([start/0]).
+-export([start/0, create_menus/2]).
 -export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, 
 	 handle_call/3, handle_info/2, check_page_title/1]).
 
 %% Includes
 -include_lib("wx/include/wx.hrl").
 
-%% Defines
--define(OBS_SYS_WX, observer_sys_wx).
--define(OBS_PRO_WX, observer_pro_wx).
+-include("observer_defs.hrl").
 
+%% Defines
 
 -define(ID_PING, 1).
 -define(ID_CONNECT, 2).
@@ -22,31 +38,26 @@
 
 %% Records
 -record(state,
-	{	  frame,
-		  menubar,
-		  node_menu,
-		  file_menu,
-		  help_menu,
-		  status_bar,
-		  notebook,
-		  main_panel,
-		  app_panel,
-		  pro_panel,
-		  tv_panel,
-		  sys_panel,
-		  node,
-		  nodes
-	}).
-
--record(create_menu, 
-	{id,
-	 text,
-	 type = append,
-	 check = true
+	{frame,
+	 menubar,
+	 status_bar,
+	 notebook,
+	 main_panel,
+	 app_panel,
+	 pro_panel,
+	 tv_panel,
+	 sys_panel,
+	 active_tab,
+	 node,
+	 nodes
 	}).
 
 start() ->
     wx_object:start(?MODULE, [], []).
+
+create_menus(Object, Menus) when is_list(Menus) ->
+    wx_object:call(Object, {create_menus, Menus}).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -60,23 +71,12 @@ init(_Args) ->
     {Frame, UpdState}.
 
 setup(#state{frame = Frame} = State) ->
-    Env = wx:get_env(),
-
     %% Setup Menubar & Menus
     MenuBar = wxMenuBar:new(),
 
-    FileMenu = create_menu([#create_menu{id = ?wxID_EXIT, text = "&Quit"}], "File", MenuBar),
-    HelpMenu = create_menu([#create_menu{id = ?wxID_HELP, text = "&Help"}], "Help", MenuBar),
-    {Nodes, NodesMenuItems} = get_nodes(),
-    
-    NodeMenu = case erlang:is_alive() of
-		   true ->
-		       create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
-		   false ->
-		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"} | NodesMenuItems], "Nodes", MenuBar)
-	       end,
-    
-
+    {Nodes, NodeMenus} = get_nodes(),
+    DefMenus = default_menus(NodeMenus),
+    create_menu(DefMenus, MenuBar),
 
     wxFrame:setMenuBar(Frame, MenuBar),
     StatusBar = wxFrame:createStatusBar(Frame, []),
@@ -91,11 +91,11 @@ setup(#state{frame = Frame} = State) ->
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
     
     %% System Panel
-    SysPanel = ?OBS_SYS_WX:start_link(Notebook, MenuBar),
+    SysPanel = ?OBS_SYS_WX:start_link(Notebook, self()),
     wxNotebook:addPage(Notebook, SysPanel, "System", []),
     
     %% Process Panel
-    ProPanel = ?OBS_PRO_WX:start_link(Notebook, Env, MenuBar, StatusBar),
+    ProPanel = ?OBS_PRO_WX:start_link(Notebook, self()),
     wxNotebook:addPage(Notebook, ProPanel, "Processes", []),
    
     %% Application Panel
@@ -103,7 +103,7 @@ setup(#state{frame = Frame} = State) ->
     %wxNotebook:addPage(Notebook, AppPanel, "Applications", []),
 
     %% Table Viewer Panel
-    TVPanel = observer_tv_wx:start_link(Notebook, MenuBar, StatusBar),
+    TVPanel = observer_tv_wx:start_link(Notebook, self()),
     wxNotebook:addPage(Notebook, TVPanel, "Table Viewer", []),
     
     wxSizer:add(MainSizer, Notebook, [{proportion, 1}, {flag, ?wxEXPAND}]),
@@ -112,18 +112,19 @@ setup(#state{frame = Frame} = State) ->
     wxNotebook:connect(Notebook, command_notebook_page_changed),
     wxFrame:connect(Frame, close_window, [{skip, true}]),
     wxMenu:connect(Frame, command_menu_selected, [{skip, true}]),
-          
+
+    SysPid = wx_object:get_pid(SysPanel),
+    SysPid ! {active, node()},
     UpdState = State#state{main_panel = Panel,
 			   notebook = Notebook,
 			   menubar = MenuBar,
-			   node_menu = NodeMenu,
-			   file_menu = FileMenu,
-			   help_menu = HelpMenu,
 			   status_bar = StatusBar,
 			   sys_panel = SysPanel,
 			   pro_panel = ProPanel,
 			   tv_panel  = TVPanel,
 %%			   app_panel = AppPanel,
+			   active_tab = SysPid,
+			   node  = node(),
 			   nodes = Nodes
 			  },
     UpdState.
@@ -132,8 +133,8 @@ setup(#state{frame = Frame} = State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%Callbacks
-handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}} = Event, State) ->
-    io:format("~p~n", [node()]),
+handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}},
+	     #state{active_tab=Previous, node=Node, notebook = Notebook} = State) ->
     Pid = case check_page_title(Notebook) of
 	      "Processes" ->
 		  wx_object:get_pid(State#state.pro_panel);
@@ -146,8 +147,9 @@ handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_pag
 	      _Other ->
 		  ok
 	  end,
-    Pid ! Event,
-    {noreply, State};
+    Previous ! not_active,
+    Pid ! {active, Node},
+    {noreply, State#state{active_tab=Pid}};
 
 handle_event(#wx{event = #wxClose{}}, State) ->
     {stop, normal, State};
@@ -217,6 +219,14 @@ handle_cast(Cast, State) ->
     io:format("~p:~p: Got cast ~p~n", [?MODULE, ?LINE, Cast]),
     {noreply, State}.
 
+handle_call({create_menus, TabMenus}, _From, State = #state{menubar=MenuBar}) ->
+    {_Nodes, NodeMenus} = get_nodes(),
+    DefMenus = default_menus(NodeMenus),
+    Menus = merge_menus(DefMenus, TabMenus),
+    clean_menus(MenuBar),
+    create_menu(Menus, MenuBar),
+    {reply, ok, State};
+
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
@@ -285,14 +295,52 @@ create_popup_dialog(Msg, Title, #state{frame = Frame}) ->
     wxMessageDialog:setTitle(Popup, Title),
     wxDialog:showModal(Popup).
 
-create_menu(MenuItems, Name, MenuBar) ->
-    Menu = wxMenu:new(),
-    lists:foreach(fun(Record) ->
-			  create_menu_item(Record, Menu)
-		  end,
-		  MenuItems),
-    wxMenuBar:append(MenuBar, Menu, Name),
-    Menu.
+default_menus(NodesMenuItems) ->
+    FileMenu = {"File", [#create_menu{id = ?wxID_EXIT, text = "&Quit"}]},
+    HelpMenu = {"Help", [#create_menu{id = ?wxID_HELP, text = "&Help"}]},
+    NodeMenu = case erlang:is_alive() of
+		   true ->
+		       {"Nodes", NodesMenuItems ++
+			    [#create_menu{id = ?ID_PING, text = "&Ping node"}]};
+		   false ->
+		       {"Nodes", NodesMenuItems ++
+			    [#create_menu{id = ?ID_CONNECT, text = "&Connect"}]}
+	       end,
+    [FileMenu, NodeMenu, HelpMenu].
+
+clean_menus(MenuBar) ->
+    io:format("Remove menus..."),
+    Count = wxMenuBar:getMenuCount(MenuBar),
+    remove_menu_item(MenuBar, Count),
+    io:format("done~n").
+
+remove_menu_item(MenuBar, Item) when Item > -1 ->
+    Menu = wxMenuBar:getMenu(MenuBar, Item),
+    wxMenuBar:remove(MenuBar, Item),
+    wxMenu:destroy(Menu),
+    remove_menu_item(MenuBar, Item-1);
+remove_menu_item(_, _) ->
+    ok.
+
+merge_menus([{Label, Items}|Default], [{Label, TabItems}|TabMenus]) ->
+    [{Label, TabItems ++ Items} | merge_menus(Default, TabMenus)];
+merge_menus([Menu = {"File", _}|Default], TabMenus) ->
+    [Menu | merge_menus(Default, TabMenus)];
+merge_menus(Default = [{"Nodes", _}|_], TabMenus) ->
+    TabMenus ++ Default.
+
+create_menu(Menus, MenuBar) ->
+    io:format("Menus ~p~n",[Menus]),
+    Add = fun({Name, MenuItems}) ->
+		  Menu = wxMenu:new(),
+		  lists:foreach(fun(Record) ->
+					create_menu_item(Record, Menu)
+				end,
+				MenuItems),
+		  wxMenuBar:append(MenuBar, Menu, Name)
+	  end,
+    wx:foreach(Add, Menus),
+    ok.
 
 create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check}, Menu) ->
     case Type of
@@ -317,24 +365,27 @@ get_nodes() ->
 		    Nodes),
     {Nodes, lists:reverse(Menues)}.
 
-update_node_list(State) ->
+update_node_list(State = #state{menubar=MenuBar}) ->
     {Nodes, NodesMenuItems} = get_nodes(),
-    lists:foreach(fun(Item) ->
-			  wxMenu:delete(State#state.node_menu, Item)
-		  end,
-		  wxMenu:getMenuItems(State#state.node_menu)),
+    NodeMenuId = wxMenuBar:findMenu(MenuBar, "Nodes"),
+    NodeMenu = wxMenuBar:getMenu(MenuBar, NodeMenuId),
+    wx:foreach(fun(Item) ->
+		       wxMenu:'Destroy'(NodeMenu, Item)
+	       end,
+	       wxMenu:getMenuItems(NodeMenu)),
     
     case erlang:is_alive() of
 	true ->
-	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu);
+	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"},
+			     NodeMenu);
 	false ->
-	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Connect"}, State#state.node_menu)
+	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Connect"},
+			     NodeMenu)
     end,
     
-    lists:foreach(fun(Record) ->
-			  create_menu_item(Record, State#state.node_menu)
-		  end,
-		  NodesMenuItems),
+    wx:foreach(fun(Record) ->
+		       create_menu_item(Record, NodeMenu)
+	       end, NodesMenuItems),
     State#state{nodes = Nodes}.
 
 

@@ -1,14 +1,28 @@
-%%%-------------------------------------------------------------------
-%%% @author Dan Gudmundsson <dgud@erlang.org>
-%%% @copyright (C) 2011, Dan Gudmundsson
-%%% @doc
-%%%
-%%% @end
-%%% Created : 21 Jun 2011 by Dan Gudmundsson <dgud@erlang.org>
-%%%-------------------------------------------------------------------
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2011. All Rights Reserved.
+%%
+%% The contents of this file are subject to the Erlang Public License,
+%% Version 1.1, (the "License"); you may not use this file except in
+%% compliance with the License. You should have received a copy of the
+%% Erlang Public License along with this software. If not, it can be
+%% retrieved online at http://www.erlang.org/.
+%%
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+%% the License for the specific language governing rights and limitations
+%% under the License.
+%%
+%% %CopyrightEnd%
 -module(observer_tv_wx).
 
--export([start_link/3]).
+-export([start_link/2]).
+
+%% wx_object callbacks
+-export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
+	 handle_event/2, handle_cast/2]).
+
 -compile(export_all).
 
 -import(observer_pro_wx, [to_str/1]).
@@ -33,15 +47,16 @@
 
 -record(state,
 	{
+	  parent,
 	  grid,
 	  node=node(),
 	  opt=#opt{}
 	}).
 
-start_link(Notebook,  MenuBar, StatusBar) ->
-    wx_object:start_link(?MODULE, [Notebook, MenuBar, StatusBar], []).
+start_link(Notebook,  Parent) ->
+    wx_object:start_link(?MODULE, [Notebook, Parent], []).
 
-init([Notebook, MenuBar, StatusBar]) ->
+init([Notebook, Parent]) ->
     Panel = wxPanel:new(Notebook),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
     Style = ?wxLC_REPORT bor ?wxLC_SINGLE_SEL bor ?wxLC_HRULES,
@@ -74,13 +89,7 @@ init([Notebook, MenuBar, StatusBar]) ->
 
     %% wxWindow:connect(Panel, enter_window, [{skip,true}]),
     wxWindow:setFocus(Grid),
-    {Panel, #state{grid=Grid}}.
-
-handle_event(#wx{event=#wxNotebook{}}, State = #state{node=Node, grid=Grid, opt=Opt}) ->
-    Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
-    wxWindow:setFocus(Grid),
-    {noreply, State};
+    {Panel, #state{grid=Grid, parent=Parent}}.
 
 handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	     State = #state{node=Node, grid=Grid,
@@ -109,6 +118,12 @@ handle_call(Event, From, State) ->
 handle_cast(Event, State) ->
     io:format("~p:~p, handle cast ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
+
+handle_info({active, Node}, State = #state{grid=Grid, opt=Opt}) ->
+    Tables = get_tables(Node, Opt),
+    update_grid(Grid, Opt, Tables),
+    wxWindow:setFocus(Grid),
+    {noreply, State#state{node=Node}};
 
 handle_info(Event, State) ->
     io:format("~p:~p, handle info ~p\n", [?MODULE, ?LINE, Event]),

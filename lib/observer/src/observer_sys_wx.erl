@@ -1,3 +1,20 @@
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2011. All Rights Reserved.
+%%
+%% The contents of this file are subject to the Erlang Public License,
+%% Version 1.1, (the "License"); you may not use this file except in
+%% compliance with the License. You should have received a copy of the
+%% Erlang Public License along with this software. If not, it can be
+%% retrieved online at http://www.erlang.org/.
+%%
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+%% the License for the specific language governing rights and limitations
+%% under the License.
+%%
+%% %CopyrightEnd%
 -module(observer_sys_wx).
 
 -behaviour(wx_object).
@@ -8,17 +25,14 @@
 	 handle_event/2, handle_cast/2]).
 
 -include_lib("wx/include/wx.hrl").
-
-%% Defines
--define(OBS_SYS_LOGIC, observer_sys).
--define(OBS, observer_wx).
+-include("observer_defs.hrl").
 
 -define(ID_REFRESH, 103).
 
-
 %% Records
 -record(sys_wx_state,
-	{panel,
+	{parent,
+	 panel,
 	 menubar,
 	 parent_notebook,
 	 no_procs,
@@ -36,19 +50,12 @@
 	 node_label,
 	 node}).
 
--record(create_menu, 
-	{id,
-	 text,
-	 type = append,
-	 check = true
-	}).
-
-start_link(Notebook, MenuBar) ->
-    wx_object:start_link(?MODULE, [Notebook, MenuBar], []).
+start_link(Notebook, Parent) ->
+    wx_object:start_link(?MODULE, [Notebook, Parent], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init([Notebook, MenuBar]) ->
+init([Notebook, Parent]) ->
     SysPanel = wxPanel:new(Notebook, []),
     
     %% Setup sizers
@@ -112,8 +119,8 @@ init([Notebook, MenuBar]) ->
     
     %% Create StateRecord
     SysPanelState = #sys_wx_state{
+      parent = Parent,
       panel = SysPanel,
-      menubar = MenuBar,
       parent_notebook = Notebook,
       node_label = NodeLabel, 
       no_procs = NoProcsTxt,
@@ -131,7 +138,6 @@ init([Notebook, MenuBar]) ->
       node = node()},
       
     wxPanel:setSizer(SysPanel, SysSizer),
-    create_sys_menu(MenuBar),
     erlang:send_after(3000, self(), update),
     {SysPanel, SysPanelState}.
 
@@ -143,42 +149,10 @@ create_info_label(Panel, Sizer, Msg) ->
     wxSizer:add(Sizer, WxText),
     WxText.
 
-
-create_menu(MenuItems, Name, MenuBar) ->
-    Menu = wxMenu:new(),
-    lists:foreach(fun(Record) ->
-			  create_menu_item(Record, Menu)
-		  end,
-		  MenuItems),
-    wxMenuBar:append(MenuBar, Menu, Name),
-    Menu.
-
-create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check}, Menu) ->
-    case Type of
-	append ->
-	    wxMenu:append(Menu, Id, Text);
-	appendCheck ->
-	    wxMenu:appendCheckItem(Menu, Id, Text),
-	    wxMenu:check(Menu, Id, Check);
-	separator ->
-	    wxMenu:appendSeparator(Menu)
-    end.
-
-
-create_sys_menu(MenuBar) ->
-    clear_menu_bar(MenuBar),
-    create_menu([#create_menu{id = ?ID_REFRESH, text = "&Refresh"}], "View", MenuBar).
+create_sys_menu(Parent) ->
+    View = {"View", [#create_menu{id = ?ID_REFRESH, text = "&Refresh"}]},
+    observer_wx:create_menus(Parent, [View]).
     
-clear_menu_bar(MenuBar) ->
-    Count = wxMenuBar:getMenuCount(MenuBar),
-    remove_menu_item(MenuBar, Count).
-
-remove_menu_item(_MenuBar, 2) ->
-    ok;
-remove_menu_item(MenuBar, Item) ->
-    wxMenuBar:remove(MenuBar, Item),
-    remove_menu_item(MenuBar, Item-1).
-
 update_syspage(Notebook, State) ->
     case ?OBS:check_page_title(Notebook) =:= "System" of
 	true ->
@@ -249,6 +223,12 @@ handle_info({node, Node}, State) ->
     update_syspage(State#sys_wx_state.parent_notebook, UpdState),
     {noreply, UpdState};
 
+handle_info({active, Node}, State = #sys_wx_state{parent=Parent, parent_notebook=Notebook}) ->
+    UpdState = State#sys_wx_state{node = Node},
+    create_sys_menu(Parent),
+    update_syspage(Notebook, UpdState),
+    {noreply, UpdState};
+
 handle_info(Info, State) ->
     io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
@@ -271,11 +251,6 @@ handle_cast(Msg, State) ->
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, State) ->
     io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
     update_syspage(State#sys_wx_state.parent_notebook, State),
-    {noreply, State};
-
-handle_event(#wx{event = #wxNotebook{type = command_notebook_page_changed}}, State) ->
-    update_syspage(State#sys_wx_state.parent_notebook, State),
-    create_sys_menu(State#sys_wx_state.menubar),
     {noreply, State};
 
 handle_event(Event, State) ->
