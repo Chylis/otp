@@ -70,9 +70,9 @@ setup(#state{frame = Frame} = State) ->
     
     NodeMenu = case erlang:is_alive() of
 		   true ->
-		       create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
+		       create_menu([#create_menu{id = ?ID_PING, text = "&Connect"} | NodesMenuItems], "Nodes", MenuBar);
 		   false ->
-		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"} | NodesMenuItems], "Nodes", MenuBar)
+		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Make distributed"} | NodesMenuItems], "Nodes", MenuBar)
 	       end,
     
 
@@ -157,11 +157,14 @@ handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_select
     UpdState = case create_connect_dialog(connect, State) of
 		   cancel ->
 		       State;
-		   {value, []} ->
+		   {value, [], _Integer} ->
 		       State;
-		   {value, Value} when is_list(Value) -> %% felhantering, t.ex start går ej, om man rdan connectat, samt välja name/sname, cookie, hidden?
-		       net_kernel:start([erlang:list_to_atom(Value)]),
-		       io:format("connected. nodename: ~p~n", [node()]),
+		   {value, NodeName, 0} when is_list(NodeName) -> % 0 = Short name
+		       net_kernel:start([erlang:list_to_atom(NodeName), shortnames]),
+		       change_node_view(node(), State);
+		   {value, NodeName, 1} when is_list(NodeName) -> % 1 = Long name
+		       %% felhantering, cookie, hidden?
+		       net_kernel:start([erlang:list_to_atom(NodeName), longnames]),
 		       change_node_view(node(), State)
 	       end,
     {noreply, UpdState};
@@ -264,10 +267,44 @@ create_connect_dialog(ping, #state{frame = Frame}) ->
 	    cancel
     end;
 create_connect_dialog(connect, #state{frame = Frame}) ->
-    Dialog = wxTextEntryDialog:new(Frame, "Node name: "),
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Distribute node ", [{size, {210, 210}}]),
+    
+    VSizer = wxBoxSizer:new(?wxVERTICAL),
+    RadioBoxSizer = wxBoxSizer:new(?wxHORIZONTAL),
+    TxtSizer = wxBoxSizer:new(?wxVERTICAL),
+    BtnSizer = wxBoxSizer:new(?wxHORIZONTAL),
+   
+    Choices = ["Short name", "Long name"],
+    RadioBox = wxRadioBox:new(Dialog, 1, "",
+			      ?wxDefaultPosition,
+			      ?wxDefaultSize,
+			      Choices,
+			      [{majorDim, 2},
+			       {style, ?wxHORIZONTAL}]),
+    Text = wxStaticText:new(Dialog, ?wxID_ANY, "Node name: "),
+    TextCtrl = wxTextCtrl:new(Dialog, 1, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
+
+    OkBtn = wxButton:new(Dialog, ?wxID_OK, [{label, "OK"}]),
+    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL, [{label, "Cancel"}]),
+
+   %% wxRadioBox:connect(RadioBox, command_radiobox_selected),
+    wxSizer:add(VSizer, RadioBoxSizer, [{flag, ?wxALIGN_CENTER}]),
+    wxSizer:add(RadioBoxSizer, RadioBox),
+    wxSizer:addSpacer(VSizer, 25),
+    wxSizer:add(VSizer, TxtSizer, [{flag, ?wxALIGN_CENTER}]),
+    wxSizer:add(TxtSizer, Text),
+    wxSizer:add(TxtSizer, TextCtrl),
+    wxSizer:addSpacer(VSizer, 45),
+    wxSizer:add(VSizer, BtnSizer, [{flag, ?wxALIGN_CENTER}]),
+    wxSizer:add(BtnSizer, CancelBtn),
+    wxSizer:add(BtnSizer, OkBtn),
+    wxWindow:setSizer(Dialog, VSizer),
+    
     case wxDialog:showModal(Dialog) of
 	?wxID_OK ->
-	    {value, wxTextEntryDialog:getValue(Dialog)};
+	    TxtValue = wxTextCtrl:getValue(TextCtrl),
+	    BtnValue = wxRadioBox:getSelection(RadioBox),
+	    {value, TxtValue, BtnValue};
 	?wxID_CANCEL ->
 	    cancel
     end.
@@ -318,9 +355,9 @@ update_node_list(State) ->
     
     case erlang:is_alive() of
 	true ->
-	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu);
+	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Connect node"}, State#state.node_menu);
 	false ->
-	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Connect"}, State#state.node_menu)
+	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Make distributed"}, State#state.node_menu)
     end,
     
     lists:foreach(fun(Record) ->
