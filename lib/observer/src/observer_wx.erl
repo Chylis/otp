@@ -410,6 +410,10 @@ update_node_list(State = #state{menubar=MenuBar}) ->
 		       wxMenu:'Destroy'(NodeMenu, Item)
 	       end,
 	       wxMenu:getMenuItems(NodeMenu)),
+
+    wx:foreach(fun(Record) ->
+		       create_menu_item(Record, NodeMenu)
+	       end, NodesMenuItems),
     
     case erlang:is_alive() of
 	true ->
@@ -417,10 +421,6 @@ update_node_list(State = #state{menubar=MenuBar}) ->
 	false ->
 	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Enable distribution"}, NodeMenu)
     end,
-    
-    wx:foreach(fun(Record) ->
-		       create_menu_item(Record, NodeMenu)
-	       end, NodesMenuItems),
     State#state{nodes = Nodes}.
 
 
