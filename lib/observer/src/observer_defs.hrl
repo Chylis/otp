@@ -26,5 +26,5 @@
 	{id,
 	 text,
 	 type = append,
-	 check = true
+	 check = false
 	}).
