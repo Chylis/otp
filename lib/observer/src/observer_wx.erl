@@ -168,7 +168,6 @@ handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_select
 		       change_node_view(node(), State)
 		       %% felhantering, cookie
 	       end,
-    io:format("~p~n", [erlang:get_cookie()]),
     {noreply, UpdState};
 
 handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}}, State) ->
@@ -297,19 +296,19 @@ create_connect_dialog(connect, #state{frame = Frame}) ->
     CookieText = wxStaticText:new(Dialog, ?wxID_ANY, "Secret cookie: "),
     CookieCtrl = wxTextCtrl:new(Dialog, ?wxID_ANY, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
     
-    BtnSizer = wxDialog:createButtonSizer(Dialog, ?wxID_DEFAULT),
+    BtnSizer = wxDialog:createStdDialogButtonSizer(Dialog, ?wxID_DEFAULT),
     Flags = [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}],
     wxSizer:add(RadioBoxSizer, RadioBox, Flags),
    
     wxSizer:add(VSizer, RadioBoxSizer, Flags),
     wxSizer:addSpacer(VSizer, 10),
     wxSizer:add(VSizer, NameText),
-    wxSizer:add(VSizer, NameCtrl),
+    wxSizer:add(VSizer, NameCtrl, Flags),
     wxSizer:addSpacer(VSizer, 10),
     wxSizer:add(VSizer, CookieText),
-    wxSizer:add(VSizer, CookieCtrl),
+    wxSizer:add(VSizer, CookieCtrl, Flags),
     wxSizer:addSpacer(VSizer, 10),
-    wxSizer:add(VSizer, BtnSizer, Flags),
+    wxSizer:add(VSizer, BtnSizer, [{flag, ?wxALIGN_LEFT}]),
 
     wxWindow:setSizer(Dialog, VSizer),
     CookiePath = filename:join(os:getenv("HOME"), ".erlang.cookie"),
