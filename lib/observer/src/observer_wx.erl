@@ -135,18 +135,7 @@ setup(#state{frame = Frame} = State) ->
 %%Callbacks
 handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}},
 	     #state{active_tab=Previous, node=Node, notebook = Notebook} = State) ->
-    Pid = case check_page_title(Notebook) of
-	      "Processes" ->
-		  wx_object:get_pid(State#state.pro_panel);
-	      "Applications" ->
-		  wx_object:get_pid(State#state.app_panel);
-	      "System" ->
-		  wx_object:get_pid(State#state.sys_panel);
-	      "Table Viewer" ->
-		  wx_object:get_pid(State#state.tv_panel);
-	      _Other ->
-		  ok
-	  end,
+    Pid = get_active_pid(State),
     Previous ! not_active,
     Pid ! {active, Node},
     {noreply, State#state{active_tab=Pid}};
@@ -205,16 +194,7 @@ handle_event(#wx{id = Id, event = #wxCommand{type = command_menu_selected}}, Sta
     {noreply, UpdState};
 
 handle_event(Event, State) ->
-    Pid = case check_page_title(State#state.notebook) of
-	      "Processes" ->
-		  wx_object:get_pid(State#state.pro_panel);
-	      "Applications" ->
-		  wx_object:get_pid(State#state.app_panel);
-	      "System" ->
-		  wx_object:get_pid(State#state.sys_panel);
-	      _Other ->
-		  ok
-	  end,
+    Pid = get_active_pid(State),
     Pid ! Event,
     {noreply, State}.
     
@@ -263,10 +243,9 @@ code_change(_, _, State) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-change_node_view(Node, #state{} = State) ->
-    Pids = [wx_object:get_pid(State#state.pro_panel), wx_object:get_pid(State#state.sys_panel)],
-    lists:foreach(fun(Pid) -> Pid ! {node, Node} end, 
-		  Pids),
+change_node_view(Node, State = #state{pro_panel=Pro, sys_panel=Sys, tv_panel=Tv}) ->
+    lists:foreach(fun(Pid) -> wx_object:get_pid(Pid) ! {node, Node} end,
+		  [Pro, Sys, Tv]),
     StatusText = ["Observer - " | atom_to_list(Node)],
     wxFrame:setTitle(State#state.frame, StatusText),
     wxStatusBar:setStatusText(State#state.status_bar, StatusText),
@@ -275,6 +254,15 @@ change_node_view(Node, #state{} = State) ->
 check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),
     wxNotebook:getPageText(Notebook, Selection).
+
+get_active_pid(#state{notebook=Notebook, pro_panel=Pro, sys_panel=Sys, tv_panel=Tv, app_panel=App}) ->
+    Panel = case check_page_title(Notebook) of
+		"Processes" -> Pro;
+		"Applications" -> App;
+		"System" -> Sys;
+		"Table Viewer" -> Tv
+	    end,
+    wx_object:get_pid(Panel).
 
 create_connect_dialog(ping, #state{frame = Frame}) ->
     Dialog = wxTextEntryDialog:new(Frame, "Connect to node"),
@@ -367,7 +355,6 @@ merge_menus(Default = [{"Nodes", _}|_], TabMenus) ->
     TabMenus ++ Default.
 
 create_menu(Menus, MenuBar) ->
-    io:format("Menus ~p~n",[Menus]),
     Add = fun({Name, MenuItems}) ->
 		  Menu = wxMenu:new(),
 		  lists:foreach(fun(Record) ->
@@ -383,8 +370,11 @@ create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check},
     case Type of
 	append ->
 	    wxMenu:append(Menu, Id, Text);
-	appendCheck ->
+	check ->
 	    wxMenu:appendCheckItem(Menu, Id, Text),
+	    wxMenu:check(Menu, Id, Check);
+	radio ->
+	    wxMenu:appendRadioItem(Menu, Id, Text),
 	    wxMenu:check(Menu, Id, Check);
 	separator ->
 	    wxMenu:appendSeparator(Menu)

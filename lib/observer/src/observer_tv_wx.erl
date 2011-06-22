@@ -29,7 +29,14 @@
 
 -behaviour(wx_object).
 -include_lib("wx/include/wx.hrl").
+-include("observer_defs.hrl").
+
 -define(GRID, 500).
+-define(ID_REFRESH, 401).
+-define(ID_ETS, 402).
+-define(ID_MNESIA, 403).
+-define(ID_UNREADABLE, 404).
+-define(ID_SYSTEM_TABLES, 405).
 
 -record(tab, {name,
 	      id,
@@ -75,7 +82,7 @@ init([Notebook, Parent]) ->
     ListItems = [{"Table Name", ?wxLIST_FORMAT_LEFT,  200},
 		 {"Table Id",   ?wxLIST_FORMAT_RIGHT, 100},
 		 {"Table Size", ?wxLIST_FORMAT_RIGHT, 100},
-		 {"Owner Pid",  ?wxLIST_FORMAT_CENTER, 100},
+		 {"Owner Pid",  ?wxLIST_FORMAT_CENTER, 150},
 		 {"Owner Name", ?wxLIST_FORMAT_LEFT,  200}
 		],
     lists:foldl(AddListEntry, 0, ListItems),
@@ -84,12 +91,18 @@ init([Notebook, Parent]) ->
     wxListCtrl:connect(Grid, command_list_item_activated),
     %% wxListCtrl:connect(Grid, command_list_item_selected),
     wxListCtrl:connect(Grid, command_list_col_click),
-    %% wxListCtrl:connect(Grid, size, [{skip, true}]),
+    wxListCtrl:connect(Grid, size, [{skip, true}]),
     %% wxListCtrl:connect(Grid, key_up, [{id, ?GRID}, {skip,true}]),
 
     %% wxWindow:connect(Panel, enter_window, [{skip,true}]),
     wxWindow:setFocus(Grid),
     {Panel, #state{grid=Grid, parent=Parent}}.
+
+handle_event(#wx{id=?ID_REFRESH},
+	     State = #state{node=Node, grid=Grid, opt=Opt}) ->
+    Tables = get_tables(Node, Opt),
+    update_grid(Grid, Opt, Tables),
+    {noreply, State};
 
 handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	     State = #state{node=Node, grid=Grid,
@@ -102,6 +115,30 @@ handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
     update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
     {noreply, State#state{opt=Opt}};
+
+handle_event(#wx{id=Id}, State = #state{node=Node, grid=Grid, opt=Opt0})
+  when Id >= ?ID_ETS, Id =< ?ID_SYSTEM_TABLES ->
+    Opt = case Id of
+	      ?ID_ETS -> Opt0#opt{type=ets};
+	      ?ID_MNESIA -> Opt0#opt{type=mnesia};
+	      ?ID_UNREADABLE -> Opt0#opt{unread_hidden= not Opt0#opt.unread_hidden};
+	      ?ID_SYSTEM_TABLES -> Opt0#opt{sys_hidden= not Opt0#opt.sys_hidden}
+	  end,
+    Tables = get_tables(Node, Opt),
+    update_grid(Grid, Opt, Tables),
+    wxWindow:setFocus(Grid),
+    {noreply, State#state{opt=Opt}};
+
+handle_event(#wx{event=#wxSize{size={W,_}}},  State=#state{grid=Grid}) ->
+    wx:batch(fun() ->
+		     Cols = wxListCtrl:getColumnCount(Grid),
+		     Last = lists:foldl(fun(I, Last) ->
+						Last - wxListCtrl:getColumnWidth(Grid, I)
+					end, W-2, lists:seq(0, Cols - 2)),
+		     Size = max(200, Last),
+		     wxListCtrl:setColumnWidth(Grid, Cols-1, Size)
+	     end),
+    {noreply, State};
 
 handle_event(Event, State) ->
     io:format("~p:~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
@@ -119,7 +156,14 @@ handle_cast(Event, State) ->
     io:format("~p:~p, handle cast ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
 
-handle_info({active, Node}, State = #state{grid=Grid, opt=Opt}) ->
+handle_info({active, Node}, State = #state{parent=Parent, grid=Grid, opt=Opt}) ->
+    Tables = get_tables(Node, Opt),
+    update_grid(Grid, Opt, Tables),
+    wxWindow:setFocus(Grid),
+    create_menus(Parent),
+    {noreply, State#state{node=Node}};
+
+handle_info({node, Node}, State = #state{grid=Grid, opt=Opt}) ->
     Tables = get_tables(Node, Opt),
     update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
@@ -138,6 +182,15 @@ code_change(_, _, State) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+create_menus(Parent) ->
+    MenuEntries = [{"View",
+		    [#create_menu{id = ?ID_REFRESH, text = "&Refresh"},
+		     #create_menu{id = ?ID_ETS, text = "&Ets Tables", type=radio, check=true},
+		     #create_menu{id = ?ID_MNESIA, text = "&Mnesia Tables", type=radio},
+		     #create_menu{id = ?ID_UNREADABLE, text = "View &Unreadable Tables", type=check},
+		     #create_menu{id = ?ID_SYSTEM_TABLES, text = "View &System Tables", type=check}]}],
+    observer_wx:create_menus(Parent, MenuEntries).
+
 get_tables(Node, Opt) ->
     case rpc:call(Node, ?MODULE, get_table_list, [Opt]) of
 	{badrpc, Error} ->
@@ -145,7 +198,7 @@ get_tables(Node, Opt) ->
 	Result -> Result
     end.
 
-get_table_list(#opt{type=ets}) ->
+get_table_list(#opt{type=ets, unread_hidden=HideUnread, sys_hidden=HideSys}) ->
     Info = fun(Id, Acc) ->
 		   try
 		       TabId = case ets:info(Id, named_table) of
@@ -153,11 +206,14 @@ get_table_list(#opt{type=ets}) ->
 				   false -> Id
 			       end,
 		       Readable = ets:info(Id, protection) /= private,
+		       ignore(HideUnread andalso (not Readable), unreadable),
+		       ignore(HideSys andalso lists:member(Id, sys_tables()), system_tab),
 		       Owner = ets:info(Id, owner),
 		       RegName = case catch process_info(Owner, registered_name) of
 				     [] -> ignore;
 				     {registered_name, ProcName} -> ProcName
 				 end,
+		       %%ignore((RegName == mnesia_monitor) andalso mnesia:table_info(Id, FIXME
 		       Tab = #tab{name = ets:info(Id, name),
 				  id = TabId,
 				  readable = Readable,
@@ -166,20 +222,137 @@ get_table_list(#opt{type=ets}) ->
 				  reg_name = RegName},
 		       [Tab|Acc]
 		   catch _:What ->
-			   io:format("~p: ~p ~n",[Id, What]),
+			   %% io:format("Skipped ~p: ~p ~n",[Id, What]),
 			   Acc
 		   end
 	   end,
     lists:foldl(Info, [], ets:all()).
 
+sys_tables() ->
+    [ac_tab,
+     asn1,
+     cdv_dump_index_table,
+     cdv_menu_table,
+     cdv_decode_heap_table,
+     cell_id,
+     cell_pos,
+     clist,
+     cover_internal_data_table,
+     cover_collected_remote_data_table,
+     cover_binary_code_table,
+     code,
+     code_names,
+     cookies,
+     corba_policy,
+     corba_policy_associations,
+     dets,
+     dets_owners,
+     dets_registry,
+     disk_log_names,
+     disk_log_pids,
+     eprof,
+     erl_atom_cache,
+     erl_epmd_nodes,
+     etop_accum_tab,
+     etop_tr,
+     ets_coverage_data,
+     file_io_servers,
+     global,
+     global_locks,
+     global_names,
+     global_names_ext,
+     gs_mapping,
+     gs_names,
+     gstk_db,
+     gstk_grid_cellid,
+     gstk_grid_cellpos,
+     gstk_grid_id,
+     gvar,
+     httpd,
+     id,
+     ig,
+     ign_req_index,
+     ign_requests,
+     index,
+     inet_cache,
+     inet_db,
+     inet_hosts,
+     'InitialReferences',
+     int_db,
+     interpreter_includedirs_macros,
+     ir_WstringDef,
+     lmcounter,
+     locks,
+     mnemosyne_tmp,
+     pg2_table,
+     queue,
+     snmp_agent_table,
+     snmp_local_db2,
+     snmp_mib_data,
+     snmp_note_store,
+     snmp_symbolic_ets,
+     sticky,
+     sys_dist,
+     tid_locks,
+     tkFun,
+     tkLink,
+     tkPriv,
+     ttb,
+     ttb_history_table,
+     udp_fds,
+     udp_pids
+    ].
+
+mnesia_tables() ->
+    [alarm,
+     alarmTable,
+     evaLogDiscriminatorTable,
+     eva_snmp_map,
+     eventTable,
+     group,
+     imprec,
+     ir_AliasDef,
+     ir_ArrayDef,
+     ir_AttributeDef,
+     ir_ConstantDef,
+     ir_Contained,
+     ir_Container,
+     ir_EnumDef,
+     ir_ExceptionDef,
+     ir_IDLType,
+     ir_IRObject,
+     ir_InterfaceDef,
+     ir_ModuleDef,
+     ir_ORB,
+     ir_OperationDef,
+     ir_PrimitiveDef,
+     ir_Repository,
+     ir_SequenceDef,
+     ir_StringDef,
+     ir_StructDef,
+     ir_TypedefDef,
+     ir_UnionDef,
+     logTable,
+     logTransferTable,
+     mesh_meas,
+     mesh_type,
+     mnesia_clist,
+     mnesia_decision,
+     mnesia_transient_decision,
+     orber_CosNaming,
+     orber_objkeys,
+     schema,
+     user
+    ].
 
 handle_error(Foo) ->
-   io:format("ERROR: ~p~n",[Foo]).
+    io:format("ERROR: ~p~n",[Foo]),
+    [].
 
-
-update_grid(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
+update_grid(Grid, Opt, Tables) ->
+    wx:batch(fun() -> update_grid2(Grid, Opt, Tables) end).
+update_grid2(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
     wxListCtrl:deleteAllItems(Grid),
-
     Update =
 	fun(#tab{name = Name,
 		 id = Id,
@@ -202,5 +375,8 @@ update_grid(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
 		   false -> lists:reverse(lists:keysort(Sort, Tables));
 		   true -> lists:keysort(Sort, Tables)
 	       end,
-    wx:foldl(Update, 0, ProcInfo),
+    lists:foldl(Update, 0, ProcInfo),
     ok.
+
+ignore(true, Reason) -> throw(Reason);
+ignore(_,_ ) -> ok.
