@@ -206,11 +206,13 @@ handle_cast(Cast, State) ->
     {noreply, State}.
 
 handle_call({create_menus, TabMenus}, _From, State = #state{menubar=MenuBar}) ->
-    {_Nodes, NodeMenus} = get_nodes(),
-    DefMenus = default_menus(NodeMenus),
-    Menus = merge_menus(DefMenus, TabMenus),
-    clean_menus(MenuBar),
-    create_menu(Menus, MenuBar),
+    wx:batch(fun() -> 
+		     {_Nodes, NodeMenus} = get_nodes(),
+		     DefMenus = default_menus(NodeMenus),
+		     Menus = merge_menus(DefMenus, TabMenus),
+		     clean_menus(MenuBar),
+		     create_menu(Menus, MenuBar)
+	     end),
     {reply, ok, State};
 
 handle_call(Msg, _From, State) ->
@@ -276,7 +278,7 @@ create_connect_dialog(ping, #state{frame = Frame}) ->
 	    cancel
     end;
 create_connect_dialog(connect, #state{frame = Frame}) ->
-    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Distribute node ", [{size, {210, 200}}]),
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Distribute node "),
 
     VSizer = wxBoxSizer:new(?wxVERTICAL),
     RadioBoxSizer = wxBoxSizer:new(?wxHORIZONTAL),
@@ -291,26 +293,39 @@ create_connect_dialog(connect, #state{frame = Frame}) ->
        
     NameText = wxStaticText:new(Dialog, ?wxID_ANY, "Node name: "),
     NameCtrl = wxTextCtrl:new(Dialog, ?wxID_ANY, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
-    wxTextCtrl:setValue(NameCtrl, "Observer"),
+    wxTextCtrl:setValue(NameCtrl, "observer"),
     CookieText = wxStaticText:new(Dialog, ?wxID_ANY, "Secret cookie: "),
     CookieCtrl = wxTextCtrl:new(Dialog, ?wxID_ANY, [{size, {200, 25}}, {style, ?wxDEFAULT}]),
     
     BtnSizer = wxDialog:createButtonSizer(Dialog, ?wxID_DEFAULT),
-    
-    wxSizer:add(RadioBoxSizer, RadioBox),
+    Flags = [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}],
+    wxSizer:add(RadioBoxSizer, RadioBox, Flags),
    
-    wxSizer:add(VSizer, RadioBoxSizer), %Radiobox
+    wxSizer:add(VSizer, RadioBoxSizer, Flags),
     wxSizer:addSpacer(VSizer, 10),
-    wxSizer:add(VSizer, NameText), %Nodename text
-    wxSizer:add(VSizer, NameCtrl), %Nodename ctrlist
+    wxSizer:add(VSizer, NameText),
+    wxSizer:add(VSizer, NameCtrl),
     wxSizer:addSpacer(VSizer, 10),
     wxSizer:add(VSizer, CookieText),
     wxSizer:add(VSizer, CookieCtrl),
     wxSizer:addSpacer(VSizer, 10),
-    wxSizer:add(VSizer, BtnSizer),
+    wxSizer:add(VSizer, BtnSizer, Flags),
 
     wxWindow:setSizer(Dialog, VSizer),
-
+    CookiePath = filename:join(os:getenv("HOME"), ".erlang.cookie"),
+    DefaultCookie = case filelib:is_file(CookiePath) of
+			true ->
+			    {ok, IoDevice} = file:open(CookiePath, read),
+			    case file:read_line(IoDevice) of
+				{ok, Cookie} ->
+				    Cookie;
+				_ ->
+				    ""
+			    end;
+			false ->
+			    ""
+		    end,
+    wxTextCtrl:setValue(CookieCtrl, DefaultCookie),
     case wxDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    NameValue = wxTextCtrl:getValue(NameCtrl),
@@ -340,10 +355,8 @@ default_menus(NodesMenuItems) ->
     [FileMenu, NodeMenu, HelpMenu].
 
 clean_menus(MenuBar) ->
-    io:format("Remove menus..."),
     Count = wxMenuBar:getMenuCount(MenuBar),
-    remove_menu_item(MenuBar, Count),
-    io:format("done~n").
+    remove_menu_item(MenuBar, Count).
 
 remove_menu_item(MenuBar, Item) when Item > -1 ->
     Menu = wxMenuBar:getMenu(MenuBar, Item),
