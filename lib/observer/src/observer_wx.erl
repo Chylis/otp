@@ -15,6 +15,7 @@
 
 
 -define(ID_PING, 1).
+-define(ID_CONNECT, 2).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -67,12 +68,20 @@ setup(#state{frame = Frame} = State) ->
     FileMenu = create_menu([#create_menu{id = ?wxID_EXIT, text = "&Quit"}], "File", MenuBar),
     HelpMenu = create_menu([#create_menu{id = ?wxID_HELP, text = "&Help"}], "Help", MenuBar),
     {Nodes, NodesMenuItems} = get_nodes(),
-    NodeMenu = create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar),
     
-    wxFrame:setMenuBar(Frame, MenuBar),
+    NodeMenu = case erlang:is_alive() of
+		   true ->
+		       create_menu([#create_menu{id = ?ID_PING, text = "&Ping node"} | NodesMenuItems], "Nodes", MenuBar);
+		   false ->
+		       create_menu([#create_menu{id = ?ID_CONNECT, text = "&Connect"} | NodesMenuItems], "Nodes", MenuBar)
+	       end,
+    
 
-    %% Setup Statusbar
+
+    wxFrame:setMenuBar(Frame, MenuBar),
     StatusBar = wxFrame:createStatusBar(Frame, []),
+    wxFrame:setTitle(Frame, atom_to_list(node())),
+    wxStatusBar:setStatusText(StatusBar, atom_to_list(node())),
     
     %% Setup panels
     Panel = wxPanel:new(Frame, []),
@@ -124,6 +133,7 @@ setup(#state{frame = Frame} = State) ->
 
 %%Callbacks
 handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}} = Event, State) ->
+    io:format("~p~n", [node()]),
     Pid = case check_page_title(Notebook) of
 	      "Processes" ->
 		  wx_object:get_pid(State#state.pro_panel);
@@ -151,28 +161,43 @@ handle_event(#wx{id = ?wxID_HELP, event = #wxCommand{type = command_menu_selecte
     io:format("~p ~p, you clicked help", [?MODULE, ?LINE]),
     {noreply, State};
 
+handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_selected}}, State) ->
+    UpdState = case create_connect_dialog(connect, State) of
+		   cancel ->
+		       State;
+		   {value, []} ->
+		       State;
+		   {value, Value} when is_list(Value) -> %% felhantering, t.ex start går ej, om man rdan connectat, samt välja name/sname, cookie, hidden?
+		       net_kernel:start([erlang:list_to_atom(Value)]),
+		       io:format("connected. nodename: ~p~n", [node()]),
+		       change_node_view(node(), State)
+	       end,
+    {noreply, UpdState};
+
 handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}}, State) ->
-    case create_connect_dialog(State) of
-	cancel ->
-	    ok;
-	{value, Value} when is_list(Value) ->
-	    Node = list_to_atom(Value),
-	    case net_adm:ping(Node) of
-		pang ->
-		    create_popup_dialog("Connect failed", State);
-		pong ->
-		    change_node_view(Node, State)   
-	    end
-    end,
-    {noreply, State};
-    
+
+    UpdState = case create_connect_dialog(ping, State) of
+		   cancel ->
+		       State;
+		   {value, Value} when is_list(Value) ->
+		       Node = list_to_atom(Value),
+		       case net_adm:ping(Node) of
+			   pang ->
+			       create_popup_dialog("Connect failed", "Pang", State),
+			       State;
+			   pong ->
+			       change_node_view(Node, State)
+		       end
+	       end,
+    {noreply, UpdState};
+
 handle_event(#wx{id = Id, event = #wxCommand{type = command_menu_selected}}, State)
   when Id > ?FIRST_NODES_MENU_ID, Id < ?LAST_NODES_MENU_ID ->
     
     Node = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#state.nodes),
     io:format("~p:~p, Klickade på nod ~p~n", [?MODULE, ?LINE, Node]),
-    change_node_view(Node, State),
-    {noreply, State};
+    UpdState = change_node_view(Node, State),
+    {noreply, UpdState};
 
 handle_event(Event, State) ->
     Pid = case check_page_title(State#state.notebook) of
@@ -200,9 +225,17 @@ handle_info({nodeup, _Node}, State) ->
     State2 = update_node_list(State),
     {noreply, State2};
 
-handle_info({nodedown, _Node}, State) ->
-    State2 = update_node_list(State),
-    {noreply, State2};
+handle_info({nodedown, Node}, State) ->
+    State2 = case Node =:= State#state.node of
+		 true ->
+		     change_node_view(node(), State);
+		 false ->
+		     State
+	     end,
+    State3 = update_node_list(State2),
+    Msg = ["Node down: " | atom_to_list(Node)],
+    create_popup_dialog(Msg, "Node down", State3),
+    {noreply, State3};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -220,22 +253,36 @@ code_change(_, _, State) ->
 change_node_view(Node, #state{} = State) ->
     Pids = [wx_object:get_pid(State#state.pro_panel), wx_object:get_pid(State#state.sys_panel)],
     lists:foreach(fun(Pid) -> Pid ! {node, Node} end, 
-		  Pids).
+		  Pids),
+    StatusText = ["Observer - " | atom_to_list(Node)],
+    wxFrame:setTitle(State#state.frame, StatusText),
+    wxStatusBar:setStatusText(State#state.status_bar, StatusText),
+    State#state{node = Node}.
 
 check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),
     wxNotebook:getPageText(Notebook, Selection).
 
-create_connect_dialog(#state{frame = Frame}) ->
+create_connect_dialog(ping, #state{frame = Frame}) ->
     Dialog = wxTextEntryDialog:new(Frame, "Connect to node"),
     case wxDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    {value, wxTextEntryDialog:getValue(Dialog)};
 	?wxID_CANCEL ->
 	    cancel
+    end;
+create_connect_dialog(connect, #state{frame = Frame}) ->
+    Dialog = wxTextEntryDialog:new(Frame, "Node name: "),
+    case wxDialog:showModal(Dialog) of
+	?wxID_OK ->
+	    {value, wxTextEntryDialog:getValue(Dialog)};
+	?wxID_CANCEL ->
+	    cancel
     end.
-create_popup_dialog(Msg, #state{frame = Frame}) ->
+
+create_popup_dialog(Msg, Title, #state{frame = Frame}) ->
     Popup = wxMessageDialog:new(Frame, Msg),
+    wxMessageDialog:setTitle(Popup, Title),
     wxDialog:showModal(Popup).
 
 create_menu(MenuItems, Name, MenuBar) ->
@@ -277,8 +324,13 @@ update_node_list(State) ->
 		  end,
 		  wxMenu:getMenuItems(State#state.node_menu)),
     
-    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu),
-
+    case erlang:is_alive() of
+	true ->
+	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Ping node"}, State#state.node_menu);
+	false ->
+	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Connect"}, State#state.node_menu)
+    end,
+    
     lists:foreach(fun(Record) ->
 			  create_menu_item(Record, State#state.node_menu)
 		  end,
