@@ -153,25 +153,24 @@ create_sys_menu(Parent) ->
     View = {"View", [#create_menu{id = ?ID_REFRESH, text = "&Refresh"}]},
     observer_wx:create_menus(Parent, [View]).
     
-update_syspage(Notebook, State) ->
+update_syspage(Notebook, #sys_wx_state{node = Node} = State) ->
     case ?OBS:check_page_title(Notebook) =:= "System" of
 	true ->
-	    io:format("Updating syspage for node ~p~n", [State#sys_wx_state.node]),
+	    io:format("Updating syspage for node ~p~n", [Node]),
 	    
-	    update_info_label(State#sys_wx_state.node, node_label, State#sys_wx_state.node_label),
-	    update_info_label(State#sys_wx_state.node, no_procs, State#sys_wx_state.no_procs),
-	    update_info_label(State#sys_wx_state.node, no_procs, State#sys_wx_state.no_procs),
-	    update_info_label(State#sys_wx_state.node, no_cpu, State#sys_wx_state.no_cpu),
-	    update_info_label(State#sys_wx_state.node, no_cpu_available, State#sys_wx_state.no_cpu_available),
-	    update_info_label(State#sys_wx_state.node, no_cpu_online, State#sys_wx_state.no_cpu_online),
-	    update_info_label(State#sys_wx_state.node, tot_alloc, State#sys_wx_state.tot_alloc),
-	    update_info_label(State#sys_wx_state.node, proc_used, State#sys_wx_state.proc_used),
-	    update_info_label(State#sys_wx_state.node, proc_alloc, State#sys_wx_state.proc_alloc),
-	    update_info_label(State#sys_wx_state.node, atom_used, State#sys_wx_state.atom_used),
-	    update_info_label(State#sys_wx_state.node, atom_alloc, State#sys_wx_state.atom_alloc),
-	    update_info_label(State#sys_wx_state.node, binary_alloc, State#sys_wx_state.binary_alloc),
-	    update_info_label(State#sys_wx_state.node, code_alloc, State#sys_wx_state.code_alloc),
-	    update_info_label(State#sys_wx_state.node, ets_alloc, State#sys_wx_state.ets_alloc);
+	    update_info_label(Node, node_label, State#sys_wx_state.node_label),
+	    update_info_label(Node, no_procs, State#sys_wx_state.no_procs),
+	    update_info_label(Node, no_cpu, State#sys_wx_state.no_cpu),
+	    update_info_label(Node, no_cpu_available, State#sys_wx_state.no_cpu_available),
+	    update_info_label(Node, no_cpu_online, State#sys_wx_state.no_cpu_online),
+	    update_info_label(Node, tot_alloc, State#sys_wx_state.tot_alloc),
+	    update_info_label(Node, proc_used, State#sys_wx_state.proc_used),
+	    update_info_label(Node, proc_alloc, State#sys_wx_state.proc_alloc),
+	    update_info_label(Node, atom_used, State#sys_wx_state.atom_used),
+	    update_info_label(Node, atom_alloc, State#sys_wx_state.atom_alloc),
+	    update_info_label(Node, binary_alloc, State#sys_wx_state.binary_alloc),
+	    update_info_label(Node, code_alloc, State#sys_wx_state.code_alloc),
+	    update_info_label(Node, ets_alloc, State#sys_wx_state.ets_alloc);
 	
 	false ->
 	    ok

@@ -27,7 +27,7 @@
 -module(erltop_options).
 -author('olle@erix.ericsson.se').
 
--export([start/4, init/4]).
+-export([start/4, init/4, loop/1]).
 
 -include_lib("wx/include/wx.hrl").
 -include("erltop_defs.hrl").
@@ -204,7 +204,6 @@ process_info_boxes(Panel, ProcessInfo) ->
 			   [{last_calls, "Last calls"},
 			    {links, "Links"},
 			    {memory, "Memory"},
-			    {message_binary, "Message binary"},
 			    {message_queue_len, "Message queue length"},
 			    {messages, "Message"},
 			    {monitored_by, "Monitored by"},
@@ -362,7 +361,7 @@ loop(State = #state{boxes = Boxes}) ->
 	    
 	    case Trace#trace_options.to_file of
 		true ->
-		    File = filename:join(os:getenv("HOME"), ".erlang_tools/pman.log"),
+		    File = filename:join(os:getenv("HOME"), ".erlang_tools/obstop.log"),
 		    State#state.parent ! {checked, Trace#trace_options{file = File}, Atoms, Interval};
 		false ->
 		    State#state.parent ! {checked, Trace, Atoms, Interval}

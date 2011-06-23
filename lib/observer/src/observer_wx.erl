@@ -19,7 +19,8 @@
 
 -behaviour(wx_object).
 
--export([start/0, create_menus/2]).
+-export([start/0]).
+-export([create_menus/2, create_menu/2]).
 -export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, 
 	 handle_call/3, handle_info/2, check_page_title/1]).
 
@@ -217,6 +218,10 @@ handle_call({create_menus, TabMenus}, _From, State = #state{menubar=MenuBar}) ->
 handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
+
+handle_info({statusbar, Msg}, State) ->
+    wxStatusBar:setStatusText(State#state.status_bar, Msg),
+    {noreply, State};
 
 handle_info({nodeup, _Node}, State) ->
     State2 = update_node_list(State),

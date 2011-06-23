@@ -45,7 +45,12 @@
 		toggle_button,
 		node,
 		parent,
-		io_device}).
+		io_device,
+		traced_procs}).
+
+-record(traced, {node,
+		 pid,
+		 flags}).
 
 -define(OPTIONS, 1).
 -define(SAVE_BUFFER, 2).
@@ -72,7 +77,6 @@
 -define(DICTIONARY, 31).
 -define(LAST_CALL, 32).
 -define(MEMORY, 33).
--define(MESSAGE_BINARY, 34).
 -define(MESSAGE_QUEUE_LEN, 35).
 -define(MESSAGES, 36).
 -define(MONITORED_BY, 37).
@@ -140,25 +144,28 @@ create_window(Wx, Process, Options, ProcessInfo, Node) ->
 	   process = Process,
 	   process_info =  ProcessInfo,
 	   toggle_button = ToggleButton,
+	   traced_procs = [],
 	   trace_options = Options#trace_options{main_window = false}}.
 
 create_menues(MenuBar) ->
-    erltop_wxgui:create_menu(
-      [#create_menu{id = ?OPTIONS, text = "Options"},
-       #create_menu{id = ?SAVE_BUFFER, text = "Save buffer..."},
-       #create_menu{id = ?CLOSE, text = "&Close"}],
-      "File", MenuBar),
-    erltop_wxgui:create_menu(
-      [#create_menu{id = ?CLEAR, text = "Clear buffer..."},
-       #create_menu{id = ?MODULE_INFO, text = "Module info"}],
-      "View", MenuBar),
-    erltop_wxgui:create_menu(
-      [#create_menu{id = ?ALL_LINKED, text = "All linked processes"},
-       #create_menu{id = ?LINKED_PROCESS, text = "Linked process..."},
-       #create_menu{id = ?KILL, text = "Kill"}],
-      "Trace", MenuBar).
+    observer_wx:create_menu(
+      [
+       {"File", [#create_menu{id = ?OPTIONS, text = "&Options"},
+		 #create_menu{id = ?SAVE_BUFFER, text = "&Save buffer..."},
+		 #create_menu{id = ?CLOSE, text = "&Close"}
+		]},
+       {"View", [#create_menu{id = ?CLEAR, text = "&Clear buffer..."},
+		 #create_menu{id = ?MODULE_INFO, text = "&Module info"}
+		]},
+       {"Trace", [#create_menu{id = ?ALL_LINKED, text = "&All linked processes"},
+		  #create_menu{id = ?LINKED_PROCESS, text = "&Linked process..."},
+		  #create_menu{id = ?KILL, text = "&Kill"}
+		 ]}
+      ],
+      MenuBar).
 
 info(Node, Process, Info) ->
+    io:format("Info~p~n", [Info]),
     ProcessInfo = format_info(rpc:call(Node, erlang, process_info, [Process, Info])),
     lists:flatten([io_lib:format("--------------------------------------------------\n"
 				 "Process info:\n"
@@ -199,8 +206,9 @@ name(Pid) ->
 
 
 window_loop(State) ->
+    io:format("windowloop~n"),
     receive
-	{checked, Opt, ProcessInfo, _Interval} ->
+	{checked, Opt, ProcessInfo, _Interval} -> %% Trace to file checked. When pressed OK erltop:otptions
 	    State2 = State#state{trace_options = Opt,
 				 process_info = ProcessInfo},
 	    ?MODULE:window_loop(State2);
@@ -239,7 +247,7 @@ window_loop(State) ->
 			    wxTextCtrl:saveFile(State#state.text_ctrl, [{file, Path}]),
 			    wxTextCtrl:appendText(State#state.text_ctrl, "Saved to: " ++  Path ++ "\n");
 			true ->
-			    wxTextCtrl:appendText(State#state.text_ctrl, "File exists " ++  Path ++ "\n")
+			    wxTextCtrl:appendText(State#state.text_ctrl, "File already exists " ++  Path ++ "\n")
 		    end;
 		_ -> ok
 	    end,
@@ -249,19 +257,22 @@ window_loop(State) ->
 	    %% io:format("Shutdown. ~p\n", [self()]),
 	    exit(shutdown);
 %%%-----------------------------------------------------------------
-	#wx{id = ?ALL_LINKED, event = #wxCommand{type = command_menu_selected}} ->
+	#wx{id = ?ALL_LINKED, event = #wxCommand{type = command_menu_selected}} ->  %Ofärdig?
 	    ?MODULE:window_loop(State);
-	#wx{id = ?LINKED_PROCESS, event = #wxCommand{type = command_menu_selected}} ->
+	#wx{id = ?LINKED_PROCESS, event = #wxCommand{type = command_menu_selected}} -> %Ofärdig?
 	    ?MODULE:window_loop(State);
 	#wx{id = ?KILL, event = #wxCommand{type = command_menu_selected}} ->
 	    exit(State#state.process, kill),
 	    exit(shutdown);
-	#wx{id = Id, event = #wxCommand{type = command_menu_selected, commandInt = Int}} ->
+	#wx{id = Id, event = #wxCommand{type = command_menu_selected, commandInt = Int}} -> %Onödig?
+	    io:format("Menu selected med commandint: ~p~n", [Int]),
 	    State2 = show_info(Id, Int, State),
 	    ?MODULE:window_loop(State2);
 %%%-----------------------------------------------------------------
 	#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}} ->
 	    Checked = State#state.trace_options,
+	    Node = State#state.node,
+	    TracedProcs = State#state.traced_procs,
 	    State2 = 
 		case Checked#trace_options.to_file of
 		    false ->
@@ -270,23 +281,25 @@ window_loop(State) ->
 			{ok, IODevice} = file:open(Checked#trace_options.file, [append]),
 			State#state{io_device = IODevice}
 		end,
-	    set_trace(State2#state.trace_options, true, State2#state.process),
+	    TracedProcs2 = set_trace(Node, State2#state.trace_options, true, State2#state.process, TracedProcs),
 	    wxTextCtrl:appendText(State2#state.text_ctrl, "Start Trace:\n"),
 	    wxToggleButton:setLabel(State2#state.toggle_button, "Stop Trace"),
-	    ?MODULE:window_loop(State2);
+	    ?MODULE:window_loop(State2#state{traced_procs = TracedProcs2});
 %%%-----------------------------------------------------------------
 	#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 0}} ->
 	    Checked = State#state.trace_options,
+	    Node = State#state.node,
+	    TracedProcs = State#state.traced_procs,
 	    case Checked#trace_options.to_file of
 		false ->
 		    ignore;
 		true ->
 		    file:close(State#state.io_device)
 	    end,
-	    set_trace(State#state.trace_options, false, State#state.process),
+	    TracedProcs2 = set_trace(Node, State#state.trace_options, false, State#state.process, TracedProcs),
 	    wxTextCtrl:appendText(State#state.text_ctrl, "Stop Trace.\n"),
 	    wxToggleButton:setLabel(State#state.toggle_button, "Start Trace"),
-	    ?MODULE:window_loop(State);
+	    ?MODULE:window_loop(State#state{traced_procs = TracedProcs2});
 %%%-----------------------------------------------------------------
 	#wx{event = What} ->
 	    io:format("~p~p: WX: ~p ~n", [?MODULE, self(), What]),
@@ -298,6 +311,7 @@ window_loop(State) ->
 	    ?MODULE:window_loop(State);
 %%%-----------------------------------------------------------------
 	Tuple when is_tuple(Tuple) ->
+	    io:format("incoming~n"),
 	    Checked = State#state.trace_options,
 	    Text = textformat(Tuple),
 	    case Checked#trace_options.to_file of
@@ -370,7 +384,6 @@ info_id_to_item(Id) ->
 	?LAST_CALL          -> 'last_calls';
 	?MEMORY             -> 'memory';
 	?MESSAGES           -> 'messages';
-	?MESSAGE_BINARY     -> 'message_binary';
 	?MESSAGE_QUEUE_LEN  -> 'message_queue_len';
 	?MONITORS           -> 'monitors';
 	?MONITORED_BY       -> 'monitored_by';
@@ -384,19 +397,52 @@ info_id_to_item(Id) ->
 	?TRACE              -> 'trace'	    
     end.
 
-set_trace(#trace_options{send = Send, treceive = Receive, functions = Functions,
+set_trace(_, _, false, Process, TracedProcs) ->
+    io:format("inne~n"),
+    dbg:stop_clear(),
+    {traced, ToRemove} = get_traced_pid(Process, TracedProcs),
+    io:format("ToRemove: ~p, TracedProcs: ~p~n", [ToRemove, TracedProcs]),
+    UpdTracedProcs = remove_traced_pid(ToRemove, TracedProcs),
+    io:format("~p~n", [UpdTracedProcs]),
+    
+    case UpdTracedProcs of
+	[] ->
+	    [];
+	_ ->
+	    lists:foreach(fun(TraceRecord) ->
+				  start_tracing(TraceRecord)
+			  end,
+			  UpdTracedProcs),
+	    UpdTracedProcs
+    end;
+set_trace(Node, 
+	  #trace_options{send = Send, treceive = Receive, functions = Functions,
 			 events = Events, on_1st_spawn = On1Spawn,
 			 on_all_spawn = AllSpawn, on_1st_link = On1Link,
-			 on_all_link = AllLink}, How, Process) ->
-    Recs = [{Send, send}, {Receive, 'receive'},
-	    {Functions, call}, {Events, procs},
-	    {On1Spawn, set_on_first_spawn},
-	    {AllSpawn, set_on_spawn},
-	    {On1Link, set_on_first_link},
-	    {AllLink, set_on_link}],
+			 on_all_link = AllLink}, 
+	  true, Process, TracedProcs) ->
 
-    Flags = [Assoc || {true, Assoc} <- Recs],
-    erlang:trace(Process, How, lists:flatten([{tracer, self()} | Flags])).
+    case get_traced_pid(Process, TracedProcs) of
+	{traced, _} ->
+	    io:format("~p is already being traced.~n", [Process]),
+	    TracedProcs;
+	untraced ->
+	    io:format("Starting trace of: ~p~n", [Process]),
+	    Recs = [{Send, send},
+		    {Receive, 'receive'},
+		    {Functions, call}, 
+		    {Events, procs},
+		    {On1Spawn, set_on_first_spawn},
+		    {AllSpawn, set_on_spawn},
+		    {On1Link, set_on_first_link},
+		    {AllLink, set_on_link}],
+	    
+	    Flags = [Assoc || {true, Assoc} <- Recs],
+	    Traced = #traced{node = Node, pid = Process, flags = Flags},
+	    start_tracing(Traced),
+	    [Traced | TracedProcs]
+    end.
+%%    erlang:trace(Process, How, lists:flatten([{tracer, self()} | Flags])).
 
 
 
@@ -448,3 +494,28 @@ print(1 , X, Buff) ->
 print(Num, X, Buff) ->
     Str =  tuple_space(element(Num, X)),
     print(Num-1, X, [", ",Str|Buff]).
+
+
+get_traced_pid(_Pid, []) ->
+    untraced;
+get_traced_pid(Pid, [#traced{pid = TracedPid} = Traced | _Rest]) when Pid =:= TracedPid ->
+    {traced, Traced};
+get_traced_pid(Pid, [ _H | Rest]) ->
+    get_traced_pid(Pid, Rest).
+
+
+start_tracing(#traced{node = Node, pid = Pid, flags = Flags}) ->
+    MyPid = self(),
+    HandlerFun = fun(NewMsg, _) ->
+			 io:format("NewMsg: ~p~n", [NewMsg]),
+			 MyPid ! NewMsg
+		 end,
+    dbg:tracer(Node, process, {HandlerFun, []}),
+    dbg:p(Pid, lists:flatten(Flags)).
+
+remove_traced_pid(#traced{node = Node, pid = Pid, flags = Flags}, ListOfTraced) ->
+    lists:filter(fun(#traced{node = RecNode, pid = RecPid, flags = RecFlags}) ->
+			 ((Node =/= RecNode) andalso (Pid =/= RecPid)) 
+			     andalso (Flags =/= RecFlags)
+		 end,
+		 ListOfTraced).
