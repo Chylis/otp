@@ -39,11 +39,12 @@
 -define(ID_SYSTEM_TABLES, 405).
 
 -record(tab, {name,
-	      id,
+	      id = ignore,
 	      size,
-	      readable,
 	      owner,
-	      reg_name}).
+	      reg_name,
+	      readable = true
+	     }).
 
 -record(opt, {type=ets,
 	      sys_hidden=true,
@@ -185,8 +186,10 @@ code_change(_, _, State) ->
 create_menus(Parent) ->
     MenuEntries = [{"View",
 		    [#create_menu{id = ?ID_REFRESH, text = "&Refresh"},
+		     separator,
 		     #create_menu{id = ?ID_ETS, text = "&Ets Tables", type=radio, check=true},
 		     #create_menu{id = ?ID_MNESIA, text = "&Mnesia Tables", type=radio},
+		     separator,
 		     #create_menu{id = ?ID_UNREADABLE, text = "View &Unreadable Tables", type=check},
 		     #create_menu{id = ?ID_SYSTEM_TABLES, text = "View &System Tables", type=check}]}],
     observer_wx:create_menus(Parent, MenuEntries).
@@ -205,144 +208,103 @@ get_table_list(#opt{type=ets, unread_hidden=HideUnread, sys_hidden=HideSys}) ->
 				   true -> ignore;
 				   false -> Id
 			       end,
+		       Name = ets:info(Id, name),
 		       Readable = ets:info(Id, protection) /= private,
 		       ignore(HideUnread andalso (not Readable), unreadable),
-		       ignore(HideSys andalso lists:member(Id, sys_tables()), system_tab),
 		       Owner = ets:info(Id, owner),
 		       RegName = case catch process_info(Owner, registered_name) of
 				     [] -> ignore;
 				     {registered_name, ProcName} -> ProcName
 				 end,
-		       %%ignore((RegName == mnesia_monitor) andalso mnesia:table_info(Id, FIXME
-		       Tab = #tab{name = ets:info(Id, name),
+		       ignore(HideSys andalso ordsets:is_element(RegName, sys_processes()), system_tab),
+		       ignore(HideSys andalso ordsets:is_element(Name, sys_tables()), system_tab),
+		       ignore((RegName == mnesia_monitor)
+			      andalso Name /= schema
+			      andalso is_atom((catch mnesia:table_info(Name, where_to_read))), mnesia_tab),
+		       Tab = #tab{name = Name,
 				  id = TabId,
 				  readable = Readable,
 				  owner = Owner,
 				  size = ets:info(Id, size),
 				  reg_name = RegName},
 		       [Tab|Acc]
-		   catch _:What ->
-			   %% io:format("Skipped ~p: ~p ~n",[Id, What]),
+		   catch _:_What ->
+			   %% io:format("Skipped ~p: ~p ~n",[Id, _What]),
 			   Acc
 		   end
 	   end,
-    lists:foldl(Info, [], ets:all()).
+    lists:foldl(Info, [], ets:all());
+get_table_list(#opt{type=mnesia, sys_hidden=HideSys}) ->
+    Info = fun(Id, Acc) ->
+		   try
+		       Name = Id,
+		       ignore(HideSys andalso ordsets:is_element(Name, mnesia_tables()), system_tab),
+		       Owner = ets:info(Id, owner),
+		       {registered_name, RegName} = process_info(Owner, registered_name),
+		       ignore(Name =:= schema, mnesia_tab),
+		       Tab = #tab{name = Name,
+				  owner = Owner,
+				  size = mnesia:table_info(Id, size),
+				  reg_name = RegName},
+		       [Tab|Acc]
+		   catch _:_What ->
+			   %% io:format("Skipped ~p: ~p ~n",[Id, _What]),
+			   Acc
+		   end
+	   end,
+    lists:foldl(Info, [], mnesia:system_info(tables)).
 
 sys_tables() ->
-    [ac_tab,
-     asn1,
-     cdv_dump_index_table,
-     cdv_menu_table,
-     cdv_decode_heap_table,
-     cell_id,
-     cell_pos,
-     clist,
-     cover_internal_data_table,
-     cover_collected_remote_data_table,
-     cover_binary_code_table,
-     code,
-     code_names,
-     cookies,
-     corba_policy,
-     corba_policy_associations,
-     dets,
-     dets_owners,
-     dets_registry,
-     disk_log_names,
-     disk_log_pids,
-     eprof,
-     erl_atom_cache,
-     erl_epmd_nodes,
-     etop_accum_tab,
-     etop_tr,
+    [ac_tab,  asn1,
+     cdv_dump_index_table,  cdv_menu_table,  cdv_decode_heap_table,
+     cell_id,  cell_pos,  clist,
+     cover_internal_data_table,   cover_collected_remote_data_table, cover_binary_code_table,
+     code, code_names,  cookies,
+     corba_policy,  corba_policy_associations,
+     dets, dets_owners, dets_registry,
+     disk_log_names, disk_log_pids,
+     eprof,  erl_atom_cache, erl_epmd_nodes,
+     etop_accum_tab,  etop_tr,
      ets_coverage_data,
      file_io_servers,
-     global,
-     global_locks,
-     global_names,
-     global_names_ext,
-     gs_mapping,
-     gs_names,
-     gstk_db,
-     gstk_grid_cellid,
-     gstk_grid_cellpos,
-     gstk_grid_id,
-     gvar,
+     gs_mapping, gs_names,  gstk_db,
+     gstk_grid_cellid, gstk_grid_cellpos, gstk_grid_id,
      httpd,
      id,
-     ig,
-     ign_req_index,
-     ign_requests,
+     ign_req_index, ign_requests,
      index,
-     inet_cache,
-     inet_db,
-     inet_hosts,
+     inet_cache, inet_db, inet_hosts,
      'InitialReferences',
      int_db,
      interpreter_includedirs_macros,
      ir_WstringDef,
-     lmcounter,
-     locks,
-     mnemosyne_tmp,
+     lmcounter,  locks,
+%     mnesia_decision,
+     mnesia_gvar, mnesia_stats,
+%     mnesia_transient_decision,
      pg2_table,
      queue,
-     snmp_agent_table,
-     snmp_local_db2,
-     snmp_mib_data,
-     snmp_note_store,
-     snmp_symbolic_ets,
-     sticky,
-     sys_dist,
-     tid_locks,
-     tkFun,
-     tkLink,
-     tkPriv,
-     ttb,
-     ttb_history_table,
-     udp_fds,
-     udp_pids
+     schema,
+     shell_records,
+     snmp_agent_table, snmp_local_db2, snmp_mib_data, snmp_note_store, snmp_symbolic_ets,
+     tkFun, tkLink, tkPriv,
+     ttb, ttb_history_table,
+     udp_fds, udp_pids
     ].
 
+sys_processes() ->
+    [auth, code_server, global_name_server, inet_db,
+     mnesia_recover, net_kernel, timer_server, wxe_master].
+
 mnesia_tables() ->
-    [alarm,
-     alarmTable,
-     evaLogDiscriminatorTable,
-     eva_snmp_map,
-     eventTable,
-     group,
-     imprec,
-     ir_AliasDef,
-     ir_ArrayDef,
-     ir_AttributeDef,
-     ir_ConstantDef,
-     ir_Contained,
-     ir_Container,
-     ir_EnumDef,
-     ir_ExceptionDef,
-     ir_IDLType,
-     ir_IRObject,
-     ir_InterfaceDef,
-     ir_ModuleDef,
-     ir_ORB,
-     ir_OperationDef,
-     ir_PrimitiveDef,
-     ir_Repository,
-     ir_SequenceDef,
-     ir_StringDef,
-     ir_StructDef,
-     ir_TypedefDef,
-     ir_UnionDef,
-     logTable,
-     logTransferTable,
-     mesh_meas,
-     mesh_type,
-     mnesia_clist,
-     mnesia_decision,
-     mnesia_transient_decision,
-     orber_CosNaming,
-     orber_objkeys,
-     schema,
-     user
+    [ir_AliasDef, ir_ArrayDef, ir_AttributeDef, ir_ConstantDef,
+     ir_Contained, ir_Container, ir_EnumDef, ir_ExceptionDef,
+     ir_IDLType, ir_IRObject, ir_InterfaceDef, ir_ModuleDef,
+     ir_ORB, ir_OperationDef, ir_PrimitiveDef, ir_Repository,
+     ir_SequenceDef, ir_StringDef, ir_StructDef, ir_TypedefDef,
+     ir_UnionDef, logTable, logTransferTable, mesh_meas,
+     mesh_type, mnesia_clist, orber_CosNaming,
+     orber_objkeys, user
     ].
 
 handle_error(Foo) ->
@@ -354,16 +316,18 @@ update_grid(Grid, Opt, Tables) ->
 update_grid2(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
     wxListCtrl:deleteAllItems(Grid),
     Update =
-	fun(#tab{name = Name,
-		 id = Id,
-		 owner = Owner,
-		 size = Size,
-		 reg_name = RegName}, Row) ->
+	fun(#tab{name = Name, id = Id, owner = Owner, size = Size,
+		 readable = Readable, reg_name = RegName}, Row) ->
 		wxListCtrl:insertItem(Grid, Row, ""),
 		if (Row rem 2) =:= 0 ->
 			wxListCtrl:setItemBackgroundColour(Grid, Row, {240,240,255});
 		   true -> ignore
 		end,
+		if not Readable ->
+			wxListCtrl:setItemTextColour(Grid, Row, {200,130,50});
+		   true -> ignore
+		end,
+
 		lists:foreach(fun({_, ignore}) -> ignore;
 				 ({Col, Val}) ->
 				      wxListCtrl:setItem(Grid, Row, Col, to_str(Val))

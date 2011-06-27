@@ -401,7 +401,9 @@ create_menu_item(#create_menu{id = Id, text = Text, type = Type, check = Check},
 	    wxMenu:check(Menu, Id, Check);
 	separator ->
 	    wxMenu:appendSeparator(Menu)
-    end.
+    end;
+create_menu_item(separator, Menu) ->
+    wxMenu:appendSeparator(Menu).
 
 
 get_nodes() ->
