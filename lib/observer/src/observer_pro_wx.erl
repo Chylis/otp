@@ -61,13 +61,13 @@
 %% Records
 -record(pid, {window, traced}).
 
--record(trace_options, {send         = true,
-			treceive     = true,
-			functions    = true,
-			events       = true,
-			on_1st_spawn = true,
+-record(trace_options, {send         = false,
+			treceive     = false,
+			functions    = false,
+			events       = false,
+			on_1st_spawn = false,
 			on_all_spawn = false,
-			on_1st_link  = true,
+			on_1st_link  = false,
 			on_all_link  = false,
 			main_window  = true}).
 

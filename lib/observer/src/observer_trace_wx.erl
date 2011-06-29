@@ -15,7 +15,8 @@
 		toggle_button,
 		node,
 		parent,
-		traced_procs}).
+		traced_procs,
+		mod_menus}).
 
 -record(boxes, {send, 'receive', functions, events,
 		on_spawn, on_link, all_spawn, all_link}).
@@ -28,20 +29,33 @@
 -define(ALL_LINKED, 5).
 -define(LINKED_PROCESS, 6).
 -define(KILL, 7).
+-define(VIEW_MODULE, 8).
+-define(FIRST_MODULE, 9).
 
 
 start(Node, TracedProcs, Options, ParentFrame, ParentPid) ->
     wx_object:start_link(?MODULE, [Options, Node, TracedProcs, ParentFrame, ParentPid], []).
 
 init([Options, Node, TracedProcs, ParentFrame, ParentPid]) ->
+    ModMenus = get_modmenus(Node, TracedProcs),
+    
     State = 
 	wx:batch(fun() ->
-			 create_window(ParentFrame, Options)
+			 create_window(ParentFrame, Options, ModMenus)
 		 end),
-    {State#state.frame, State#state{parent = ParentPid, node = Node, traced_procs = TracedProcs}}.
+    Frame = State#state.frame,
+    TraceOpts = State#state.trace_options,
+
+    UpdTraceOpts = create_traceoption_dialog(Frame, TraceOpts, ParentPid),
+
+    {Frame, State#state{parent = ParentPid,
+			node = Node,
+			trace_options = UpdTraceOpts, 
+			traced_procs = TracedProcs,
+			mod_menus = ModMenus}}.
 
 
-create_window(ParentFrame, Options) ->
+create_window(ParentFrame, Options, ModMenus) ->
     %% Create the window
     Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Tracer", [{size, {900, 900}}]),
     wxFrame:connect(Frame, close_window,[{skip,true}]),
@@ -50,7 +64,7 @@ create_window(ParentFrame, Options) ->
     
     %% Menues
     MenuBar = wxMenuBar:new(),
-    create_menues(MenuBar),
+    create_menues(MenuBar, ModMenus),
     wxFrame:setMenuBar(Frame, MenuBar),
     wxMenu:connect(Frame, command_menu_selected, []),
 
@@ -77,15 +91,19 @@ create_window(ParentFrame, Options) ->
 	   text_ctrl = TextCtrl, 
 	   toggle_button = ToggleButton,
 	   trace_options = Options#trace_options{main_window = false}}.
+	   
 
-create_menues(MenuBar) ->
+create_menues(MenuBar, ModMenus) ->
+    io:format("Modmenus: ~p~n", [ModMenus]),
     observer_wx:create_menu(
       [
        {"File", [#create_menu{id = ?OPTIONS, text = "&Options"},
-		 #create_menu{id = ?SAVE_BUFFER, text = "&Save buffer..."},
+		 #create_menu{id = ?SAVE_BUFFER, text = "&Save buffer"},
 		 #create_menu{id = ?CLOSE, text = "&Close"}
 		]},
-       {"View", [#create_menu{id = ?CLEAR, text = "&Clear buffer..."}]}
+       {"View", [#create_menu{id = ?CLEAR, text = "&Clear buffer"}
+		]},
+       {"Modules", ModMenus}
       ],
       MenuBar).
 
@@ -97,23 +115,9 @@ handle_event(#wx{id = ?CLOSE, event = #wxCommand{type = command_menu_selected}},
     {stop, shutdown, State};
 
 handle_event(#wx{id = ?OPTIONS, event = #wxCommand{type = command_menu_selected}}, 
-	     #state{frame = Frame, trace_options = TraceOpts} = State) ->
+	     #state{frame = Frame, trace_options = TraceOpts, parent = Parent} = State) ->
     
-    {Dialog, Boxes} = create_traceoption_dialog(Frame, TraceOpts),
-    
-    UpdTraceOpts = case wxDialog:showModal(Dialog) of
-		       ?wxID_OK ->
-			   UpdTraceOpts2 = wx:batch(fun() ->
-							    read_trace_boxes(Boxes, TraceOpts)
-						    end),
-			   
-			   State#state.parent ! {updated_traceopt, UpdTraceOpts2},
-			   UpdTraceOpts2;
-		       ?wxID_CANCEL ->
-			   io:format("Cancel~n", []),
-			   TraceOpts
-		   end,
-    
+    UpdTraceOpts = create_traceoption_dialog(Frame, TraceOpts, Parent),
     {noreply, State#state{trace_options = UpdTraceOpts}};
 
 handle_event(#wx{id = ?CLEAR, event = #wxCommand{type = command_menu_selected}}, State) ->
@@ -135,6 +139,14 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
 	    end;
 	_ -> ok
     end,
+    {noreply, State};
+
+handle_event(#wx{id = Id, 
+		 event = #wxCommand{type = command_menu_selected}}, 
+	     #state{mod_menus = ModuleMenus} = State) 
+  when Id >= ?FIRST_MODULE, Id =< ?FIRST_MODULE + length(ModuleMenus) ->
+    ModLabel = find_module(Id, ModuleMenus),
+    io:format("Du klickade på meny: ~p~n", [ModLabel]),
     {noreply, State};
 
 handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
@@ -288,7 +300,7 @@ print(Num, X, Buff) ->
     print(Num-1, X, [", ",Str|Buff]).
 
 
-create_traceoption_dialog(Frame, Opt) ->
+create_traceoption_dialog(Frame, Opt, Parent) ->
     Dialog = wxDialog:new(Frame, ?wxID_ANY, "Trace options"),
     Panel = wxPanel:new(Dialog, []),
 
@@ -336,19 +348,33 @@ create_traceoption_dialog(Frame, Opt) ->
     wxSizer:fit(MainSz, Dialog),
     wxSizer:setSizeHints(MainSz, Dialog),
     
-    {Dialog, #boxes{send = SendBox,
-		    'receive' = RecBox,
-		    functions = FuncBox,
-		    events = EventBox,
-		    on_spawn = #on_spawn{checkbox = SpawnBox,
-					 all_spawn = SpwnAllRadio,
-					 first_spawn = SpwnFirstRadio},
-		    all_spawn = SpwnAllRadio,
-		    on_link = #on_link{checkbox = LinkBox,
-				       all_link = LinkAllRadio,
-				       first_link = LinkFirstRadio},
-		    all_link = LinkAllRadio}}.
+    Boxes = #boxes{send = SendBox,
+		   'receive' = RecBox,
+		   functions = FuncBox,
+		   events = EventBox,
+		   on_spawn = #on_spawn{checkbox = SpawnBox,
+					all_spawn = SpwnAllRadio,
+					first_spawn = SpwnFirstRadio},
+		   all_spawn = SpwnAllRadio,
+		   on_link = #on_link{checkbox = LinkBox,
+				      all_link = LinkAllRadio,
+				      first_link = LinkFirstRadio},
+		   all_link = LinkAllRadio},
+    
+    
+    case wxDialog:showModal(Dialog) of
+	?wxID_OK ->
+	    UpdTraceOpts2 = wx:batch(fun() ->
+					     read_trace_boxes(Boxes, Opt)
+				     end),
+	    
+	    Parent ! {updated_traceopt, UpdTraceOpts2},
+	    UpdTraceOpts2;
+	?wxID_CANCEL ->
+	    Opt
+    end.
 
+    
 
 top_right(Panel, TopRightSz, Options, Text) ->
     Sizer = wxBoxSizer:new(?wxVERTICAL),
@@ -362,7 +388,6 @@ top_right(Panel, TopRightSz, Options, Text) ->
     wxSizer:add(RadioSz, Radio2, []),
     wxSizer:add(Sizer, RadioSz, [{flag, ?wxLEFT},{border, 20}]),
     wxSizer:add(TopRightSz, Sizer, Options),
-    wxCheckBox:connect(ChkBox, command_checkbox_clicked, []),
     {ChkBox, Radio1, Radio2}.
 
 
@@ -403,3 +428,38 @@ check_box(ChkBox, Bool) ->
 	false ->
 	    ignore
     end.
+
+
+get_modmenus(Node, PidList) ->
+    ModuleList = get_modules(Node, PidList, []),
+    create_modmenus(ModuleList).
+    
+get_modules(_, [], Modules) ->
+    Modules;
+get_modules(Node, [Pid|Pids], Modules) ->
+    {initial_call, {Module, _, _}} = rpc:call(Node, erlang, process_info, [list_to_pid(Pid), initial_call]),
+    case lists:member(Module, Modules) of
+	true ->
+	    get_modules(Node, Pids, Modules);
+	false ->
+	    get_modules(Node, Pids, [Module|Modules])
+    end.
+
+create_modmenus(ModuleList) ->
+    create_modmenus(ModuleList, ?FIRST_MODULE, []).
+
+create_modmenus([], _, Acc) ->
+    Acc;
+create_modmenus([Module|T], Id, Acc) ->
+    create_modmenus(T, Id+1, [#create_menu{id = Id, text = atom_to_list(Module)} | Acc]).
+
+
+find_module(Id, [#create_menu{id = SearchedId, text = Name} |T]) ->
+    case Id =:= SearchedId of
+	true ->
+	    Name;
+	false ->
+	    find_module(Id, T)
+    end.
+	    
+    
