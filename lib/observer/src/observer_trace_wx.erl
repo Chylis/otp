@@ -430,6 +430,24 @@ check_box(ChkBox, Bool) ->
     end.
 
 
+
+create_moduleinfo(Parent, ModuleName) ->
+    Module = list_to_atom(ModuleName),
+    [{exports, Exports} | _] = Module:module_info(),
+    NrOfExports = length(Exports),
+    
+    Choices = [io_lib:format("~p,~p", [Name, Arity]) || {Name, Arity} <- Exports],
+    wxMultiChoiceDialog(Parent, "Exported functions", 
+    
+
+
+
+
+
+
+
+
+
 get_modmenus(Node, PidList) ->
     ModuleList = get_modules(Node, PidList, []),
     create_modmenus(ModuleList).
