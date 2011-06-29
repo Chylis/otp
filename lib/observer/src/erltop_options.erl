@@ -71,7 +71,6 @@ create_window(Opt, ProcessInfo, Interval, Wx) ->
     MainSz = wxBoxSizer:new(?wxVERTICAL),
     TopSz = wxBoxSizer:new(?wxHORIZONTAL),
 
-
     TopLeftSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label,"Trace output options:"}]),
     ChkBox1 = wxCheckBox:new(Panel, ?wxID_ANY, "Trace send", []),
     check_box(ChkBox1, Opt#trace_options.send),
@@ -171,12 +170,12 @@ create_window(Opt, ProcessInfo, Interval, Wx) ->
 	    functions = ChkBox3,
 	    events = ChkBox4,
 	    on_spawn = #on_spawn{checkbox = ChkBox5,
-				 radio1 = Radio1,
-				 radio2 = Radio2},
+				 all_spawn = Radio1,
+				 first_spawn = Radio2},
 	    all_spawn = Radio1,
 	    on_link = #on_link{checkbox = ChkBox6,
-			       radio1 = Radio3,
-			       radio2 = Radio4},
+			       all_link = Radio3,
+			       first_link = Radio4},
 	    all_link = Radio3,
 	    in_window = Radio5,
 	    to_file = Radio6,
@@ -266,8 +265,8 @@ read_trace_boxes(ChkBoxes = #boxes{on_spawn = OnSpawn, on_link = OnLink}, Option
     {On1stSpawn2, OnAllSpawn2} =
 	case wxCheckBox:isChecked(OnSpawn#on_spawn.checkbox) of
 	    true ->
-		OnAllSpawn = wxRadioButton:getValue(OnSpawn#on_spawn.radio1),
-		On1stSpawn = wxRadioButton:getValue(OnSpawn#on_spawn.radio2),
+		OnAllSpawn = wxRadioButton:getValue(OnSpawn#on_spawn.all_spawn),
+		On1stSpawn = wxRadioButton:getValue(OnSpawn#on_spawn.first_spawn),
 		{On1stSpawn, OnAllSpawn};
 	    false ->
 		{false, false}
@@ -275,8 +274,8 @@ read_trace_boxes(ChkBoxes = #boxes{on_spawn = OnSpawn, on_link = OnLink}, Option
     {On1stLink2, OnAllLink2} =
 	case wxCheckBox:isChecked(OnLink#on_link.checkbox) of
 	    true ->
-		OnAllLink = wxRadioButton:getValue(OnLink#on_link.radio1),
-		On1stLink = wxRadioButton:getValue(OnLink#on_link.radio2),
+		OnAllLink = wxRadioButton:getValue(OnLink#on_link.all_link),
+		On1stLink = wxRadioButton:getValue(OnLink#on_link.first_link),
 		{On1stLink, OnAllLink};
 	    false ->
 		{false, false}
@@ -309,19 +308,19 @@ read_process_info_boxes(ProcInfoBoxes) ->
 enable(OnSpawn, OnLink) ->
     case wxCheckBox:isChecked(OnSpawn#on_spawn.checkbox) of
 	false ->
-	    wxWindow:disable(OnSpawn#on_spawn.radio1),
-	    wxWindow:disable(OnSpawn#on_spawn.radio2);
+	    wxWindow:disable(OnSpawn#on_spawn.all_spawn),
+	    wxWindow:disable(OnSpawn#on_spawn.first_spawn);
 	true ->
-	    wxWindow:enable(OnSpawn#on_spawn.radio1),
-	    wxWindow:enable(OnSpawn#on_spawn.radio2)
+	    wxWindow:enable(OnSpawn#on_spawn.all_spawn),
+	    wxWindow:enable(OnSpawn#on_spawn.first_spawn)
     end,
     case wxCheckBox:isChecked(OnLink#on_link.checkbox) of
 	false ->
-	    wxWindow:disable(OnLink#on_link.radio1),
-	    wxWindow:disable(OnLink#on_link.radio2);
+	    wxWindow:disable(OnLink#on_link.all_link),
+	    wxWindow:disable(OnLink#on_link.first_link);
 	true ->
-	    wxWindow:enable(OnLink#on_link.radio1),
-	    wxWindow:enable(OnLink#on_link.radio2)
+	    wxWindow:enable(OnLink#on_link.all_link),
+	    wxWindow:enable(OnLink#on_link.first_link)
     end.
 
 

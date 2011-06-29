@@ -398,10 +398,8 @@ info_id_to_item(Id) ->
     end.
 
 set_trace(_, _, false, Process, TracedProcs) ->
-    io:format("inne~n"),
     dbg:stop_clear(),
     {traced, ToRemove} = get_traced_pid(Process, TracedProcs),
-    io:format("ToRemove: ~p, TracedProcs: ~p~n", [ToRemove, TracedProcs]),
     UpdTracedProcs = remove_traced_pid(ToRemove, TracedProcs),
     io:format("~p~n", [UpdTracedProcs]),
     
