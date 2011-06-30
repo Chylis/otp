@@ -15,9 +15,10 @@
 		toggle_button,
 		node,
 		parent,
+		traceoptions_opened,
 		traced_procs,
 		traced_funcs = dict:new(),
-		mod_menus}).
+		modules}).
 
 -record(boxes, {send, 'receive', functions, events,
 		on_spawn, on_link, all_spawn, all_link}).
@@ -38,25 +39,26 @@ start(Node, TracedProcs, Options, ParentFrame, ParentPid) ->
     wx_object:start_link(?MODULE, [Options, Node, TracedProcs, ParentFrame, ParentPid], []).
 
 init([Options, Node, TracedProcs, ParentFrame, ParentPid]) ->
-    ModMenus = get_modmenus(Node, TracedProcs),
+    Modules = get_modules(Node, TracedProcs),
     
     State = 
 	wx:batch(fun() ->
-			 create_window(ParentFrame, Options, ModMenus)
+			 create_window(ParentFrame, Options)
 		 end),
     Frame = State#state.frame,
     TraceOpts = State#state.trace_options,
-
-    UpdTraceOpts = create_traceoption_dialog(Frame, TraceOpts, ParentPid),
-
+    TracedFuncs = State#state.traced_funcs,
+    
+    create_traceoption_dialog(Frame, Node, TraceOpts, Modules, TracedFuncs),
+    
     {Frame, State#state{parent = ParentPid,
 			node = Node,
-			trace_options = UpdTraceOpts, 
 			traced_procs = TracedProcs,
-			mod_menus = ModMenus}}.
+			traceoptions_opened = true,
+			modules = Modules}}.
 
 
-create_window(ParentFrame, Options, ModMenus) ->
+create_window(ParentFrame, Options) ->
     %% Create the window
     Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Tracer", [{size, {900, 900}}]),
     wxFrame:connect(Frame, close_window,[{skip,true}]),
@@ -65,7 +67,7 @@ create_window(ParentFrame, Options, ModMenus) ->
     
     %% Menues
     MenuBar = wxMenuBar:new(),
-    create_menues(MenuBar, ModMenus),
+    create_menues(MenuBar),
     wxFrame:setMenuBar(Frame, MenuBar),
     wxMenu:connect(Frame, command_menu_selected, []),
 
@@ -94,17 +96,15 @@ create_window(ParentFrame, Options, ModMenus) ->
 	   trace_options = Options#trace_options{main_window = false}}.
 	   
 
-create_menues(MenuBar, ModMenus) ->
-    io:format("Modmenus: ~p~n", [ModMenus]),
+create_menues(MenuBar) ->
     observer_wx:create_menu(
       [
-       {"File", [#create_menu{id = ?OPTIONS, text = "&Options"},
+       {"File", [#create_menu{id = ?OPTIONS, text = "&Trace Options"},
 		 #create_menu{id = ?SAVE_BUFFER, text = "&Save buffer"},
 		 #create_menu{id = ?CLOSE, text = "&Close"}
 		]},
        {"View", [#create_menu{id = ?CLEAR, text = "&Clear buffer"}
-		]},
-       {"Modules", ModMenus}
+		]}
       ],
       MenuBar).
 
@@ -116,41 +116,79 @@ handle_event(#wx{id = ?CLOSE, event = #wxCommand{type = command_menu_selected}},
     {stop, shutdown, State};
 
 handle_event(#wx{id = ?OPTIONS, event = #wxCommand{type = command_menu_selected}}, 
-	     #state{frame = Frame, trace_options = TraceOpts, parent = Parent} = State) ->
+	     #state{frame = Frame, trace_options = TraceOpts,
+		    traced_funcs = TracedFuncs,
+		    modules = Modules, node = Node,
+		    traceoptions_opened = false} = State) ->
     
-    UpdTraceOpts = create_traceoption_dialog(Frame, TraceOpts, Parent),
-    {noreply, State#state{trace_options = UpdTraceOpts}};
+    create_traceoption_dialog(Frame, Node, TraceOpts, Modules, TracedFuncs),
+    {noreply, State#state{traceoptions_opened = true}};
 
-handle_event(#wx{id = ?CLEAR, event = #wxCommand{type = command_menu_selected}}, State) ->
-    wxTextCtrl:clear(State#state.text_ctrl),
+handle_event(#wx{id = ?CLEAR, event = #wxCommand{type = command_menu_selected}},
+	     #state{text_ctrl = TxtCtrl} = State) ->
+    wxTextCtrl:clear(TxtCtrl),
     {noreply, State};
 
-handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selected}}, State) ->
-    Dialog = wxFileDialog:new(State#state.frame),
+handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selected}}, 
+	     #state{frame = Frame, text_ctrl = TxtCtrl} = State) ->
+    Dialog = wxFileDialog:new(Frame),
     wxFileDialog:show(Dialog),	
     case wxFileDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(Dialog),
 	    case filelib:is_file(Path) of
 		false ->
-		    wxTextCtrl:saveFile(State#state.text_ctrl, [{file, Path}]),
-		    wxTextCtrl:appendText(State#state.text_ctrl, "Saved to: " ++  Path ++ "\n");
+		    wxTextCtrl:saveFile(TxtCtrl, [{file, Path}]),
+		    wxTextCtrl:appendText(TxtCtrl, "Saved to: " ++  Path ++ "\n");
 		true ->
-		    wxTextCtrl:appendText(State#state.text_ctrl, "File already exists " ++  Path ++ "\n")
+		    wxTextCtrl:appendText(TxtCtrl, "File already exists " ++  Path ++ "\n")
 	    end;
 	_ -> ok
     end,
     {noreply, State};
 
-handle_event(#wx{id = Id, 
-		 event = #wxCommand{type = command_menu_selected}}, 
-	     #state{frame = Frame, mod_menus = ModuleMenus, traced_funcs = TracedDict} = State) 
-  when Id >= ?FIRST_MODULE, Id =< ?FIRST_MODULE + length(ModuleMenus) ->
-    io:format("Traced functions: ~p~n", [TracedDict]),
-    ModLabel = find_module(Id, ModuleMenus),
-    io:format("Du klickade på meny: ~p~n", [ModLabel]),
-    UpdTracedDict = create_moduleinfo(Frame, ModLabel, TracedDict),
+
+handle_event(#wx{obj = ComboBox,
+		 event = #wxCommand{type = command_combobox_selected}},
+	     #state{frame = Frame, traced_funcs = TracedDict} = State) ->
+    ChosenModule = wxComboBox:getValue(ComboBox),
+    UpdTracedDict = create_moduleinfo(Frame, ChosenModule, TracedDict),
     {noreply, State#state{traced_funcs = UpdTracedDict}};
+
+%% handle_event(#wx{id = Id, 
+%% 		 event = #wxCommand{type = command_menu_selected}}, 
+%% 	     #state{frame = Frame, mod_menus = ModuleMenus, traced_funcs = TracedDict} = State) 
+%%   when Id >= ?FIRST_MODULE, Id =< ?FIRST_MODULE + length(ModuleMenus) ->
+
+%%     io:format("Traced functions: ~p~n", [TracedDict]),
+%%     ModLabel = find_module(Id, ModuleMenus),
+%%     io:format("Du klickade på meny: ~p~n", [ModLabel]),
+%%     UpdTracedDict = create_moduleinfo(Frame, ModLabel, TracedDict),
+%%     {noreply, State#state{traced_funcs = UpdTracedDict}};
+
+handle_event(#wx{id = ?wxID_OK,
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {Dialog, Boxes}}, 
+	     #state{trace_options = TraceOpts, parent = Parent} = State) ->
+    
+    UpdTraceOpts = wx:batch(fun() ->
+				    read_trace_boxes(Boxes, TraceOpts)
+			    end),
+    Parent ! {updated_traceopt, UpdTraceOpts},
+    wxDialog:show(Dialog, [{show, false}]),
+    {noreply, State#state{trace_options = UpdTraceOpts, traceoptions_opened = false}};
+
+handle_event(#wx{id = ?wxID_CANCEL,
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = Dialog},
+	     State) ->
+    wxDialog:show(Dialog, [{show, false}]),
+    {noreply, State#state{traceoptions_opened = false}};
+
+handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = UserData},
+	     State) ->
+    enable(UserData),
+    {noreply, State};
 
 handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
     io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
@@ -166,10 +204,10 @@ handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, command
     {noreply, State};
 
 handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 0}}, %%Stop tracing
-	     State) ->
+	     #state{text_ctrl = TxtCtrl, toggle_button = ToggleBtn} = State) ->
     dbg:stop_clear(),
-    wxTextCtrl:appendText(State#state.text_ctrl, "Stop Trace.\n"),
-    wxToggleButton:setLabel(State#state.toggle_button, "Start Trace"),
+    wxTextCtrl:appendText(TxtCtrl, "Stop Trace.\n"),
+    wxToggleButton:setLabel(ToggleBtn, "Start Trace"),
     {noreply, State};
 
 
@@ -188,15 +226,15 @@ handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, command
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_event(#wx{event = What}, State) ->
-    io:format("~p~p: WX: ~p ~n", [?MODULE, self(), What]),
+    io:format("~p~p: Unhandled event: ~p ~n", [?MODULE, self(), What]),
     {noreply, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_info(Tuple, State) when is_tuple(Tuple) ->
+handle_info(Tuple, #state{text_ctrl = TxtCtrl} = State) when is_tuple(Tuple) ->
     io:format("Incoming tuple: ~p~n", [Tuple]),
     Text = textformat(Tuple),
-    wxTextCtrl:appendText(State#state.text_ctrl, lists:flatten(Text)),
+    wxTextCtrl:appendText(TxtCtrl, lists:flatten(Text)),
     {noreply, State};
 
 handle_info(Any, State) ->
@@ -309,53 +347,91 @@ print(Num, X, Buff) ->
     print(Num-1, X, [", ",Str|Buff]).
 
 
-create_traceoption_dialog(Frame, Opt, Parent) ->
-    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Trace options"),
+create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
+    %%Setup main window
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Trace options", [{size, {400, 500}}]),
     Panel = wxPanel:new(Dialog, []),
-
     MainSz = wxBoxSizer:new(?wxVERTICAL),
+    Notebook = wxNotebook:new(Panel, ?wxID_ANY),
+    
+    %%Setup option page
+    OptPanel = wxPanel:new(Notebook),
+    OptMainSz = wxBoxSizer:new(?wxVERTICAL),
     TopSz = wxBoxSizer:new(?wxHORIZONTAL),
-    TopLeftSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label,"Tracing options:"}]),
-    TopRightSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, "Inheritance options:"}]),
+    TopLeftSz = wxStaticBoxSizer:new(?wxVERTICAL, OptPanel, [{label, "Tracing options"}]),
+    TopRightSz = wxStaticBoxSizer:new(?wxVERTICAL, OptPanel, [{label, "Inheritance options:"}]),
         
-    SendBox = wxCheckBox:new(Panel, ?wxID_ANY, "Trace send", []),
+    SendBox = wxCheckBox:new(OptPanel, ?wxID_ANY, "Trace send", []),
     check_box(SendBox, Opt#trace_options.send),
-    RecBox = wxCheckBox:new(Panel, ?wxID_ANY, "Trace receive", []),
+    RecBox = wxCheckBox:new(OptPanel, ?wxID_ANY, "Trace receive", []),
     check_box(RecBox, Opt#trace_options.treceive),
-    FuncBox = wxCheckBox:new(Panel, ?wxID_ANY, "Trace functions", []),
+    FuncBox = wxCheckBox:new(OptPanel, ?wxID_ANY, "Trace functions", []),
     check_box(FuncBox, Opt#trace_options.functions),
-    EventBox = wxCheckBox:new(Panel, ?wxID_ANY, "Trace events", []),
+    EventBox = wxCheckBox:new(OptPanel, ?wxID_ANY, "Trace events", []),
     check_box(EventBox, Opt#trace_options.events),
     
-    {SpawnBox, SpwnAllRadio, SpwnFirstRadio} = top_right(Panel, TopRightSz, [{flag, ?wxBOTTOM},{border, 5}], "spawn"),
-    {LinkBox, LinkAllRadio, LinkFirstRadio} = top_right(Panel, TopRightSz, [{flag, ?wxBOTTOM},{border, 5}], "link"),
+    {SpawnBox, SpwnAllRadio, SpwnFirstRadio} = top_right(OptPanel, TopRightSz, [{flag, ?wxBOTTOM},{border, 5}], "spawn"),
+    {LinkBox, LinkAllRadio, LinkFirstRadio} = top_right(OptPanel, TopRightSz, [{flag, ?wxBOTTOM},{border, 5}], "link"),
+    SpawnBool = Opt#trace_options.on_all_spawn or  Opt#trace_options.on_1st_spawn,
+    LinkBool = Opt#trace_options.on_all_link or Opt#trace_options.on_1st_link,
+    check_box(SpawnBox, SpawnBool),
+    check_box(LinkBox,  LinkBool),
+    enable({SpawnBox, SpwnAllRadio, SpwnFirstRadio}),
+    enable({LinkBox, LinkAllRadio, LinkFirstRadio}),
     wxRadioButton:setValue(SpwnAllRadio, Opt#trace_options.on_all_spawn),
     wxRadioButton:setValue(SpwnFirstRadio, Opt#trace_options.on_1st_spawn),
     wxRadioButton:setValue(LinkAllRadio, Opt#trace_options.on_all_link),
     wxRadioButton:setValue(LinkFirstRadio, Opt#trace_options.on_1st_link),
-
-
-    OKBtn = wxButton:new(Panel, ?wxID_OK, []),
-    CancelBtn = wxButton:new(Panel, ?wxID_CANCEL, []),
-    BottomSz = wxBoxSizer:new(?wxHORIZONTAL),
     
-    wxSizer:add(BottomSz, CancelBtn),
-    wxSizer:add(BottomSz, OKBtn),
     wxSizer:add(TopLeftSz, SendBox, []),
     wxSizer:add(TopLeftSz, RecBox, []),
     wxSizer:add(TopLeftSz, FuncBox, []),
     wxSizer:add(TopLeftSz, EventBox, []),
     wxSizer:add(TopLeftSz, 150, -1),
    
-    wxSizer:add(TopSz, TopLeftSz, [{flag, ?wxALL},{border, 5}]),
-    wxSizer:add(TopSz, TopRightSz, [{flag, ?wxALL},{border, 5}]),
-    wxSizer:add(MainSz, TopSz, []),   
-    wxSizer:add(MainSz, BottomSz),
- 
+    wxSizer:add(TopSz, TopLeftSz, [{flag, ?wxEXPAND}]),
+    wxSizer:add(TopSz, TopRightSz,[{flag, ?wxEXPAND}]),
+    wxSizer:add(OptMainSz, TopSz, []),   
+   
+    
+    wxWindow:setSizer(OptPanel, OptMainSz),
+    wxNotebook:addPage(Notebook, OptPanel, "Trace options"),
+    
+    %%Setup trace function page
+    FuncPanel = wxPanel:new(Notebook),
+    FuncMainSz = wxBoxSizer:new(?wxVERTICAL),
+    ComboSz = wxStaticBoxSizer:new(?wxVERTICAL, FuncPanel, [{label, "Modules"}]),
+    TreeSz = wxStaticBoxSizer:new(?wxVERTICAL, FuncPanel, [{label, "Traced functions"}]),
+     
+    AllModules = atomlist_to_stringlist(Modules),
+    ModuleBox = wxComboBox:new(FuncPanel, ?wxID_ANY, [{choices, AllModules}]),
+    wxComboBox:connect(ModuleBox, command_combobox_selected),
+    
+    TreeCtrl = wxTreeCtrl:new(FuncPanel, [{size, {500, 200}}]),
+    RootId = wxTreeCtrl:addRoot(TreeCtrl, atom_to_list(Node)),
+    Choices = atomlist_to_stringlist(dict:fetch_keys(TracedDict)),
+    lists:foreach(fun(Module) ->
+			  wxTreeCtrl:appendItem(TreeCtrl, RootId, Module)
+		  end,
+		  Choices),
+    
+    
+    wxSizer:add(ComboSz, ModuleBox, [{flag, ?wxEXPAND}]),
+    wxSizer:add(TreeSz, TreeCtrl, [{flag, ?wxEXPAND},{proportion, 1}]),
+    wxSizer:add(FuncMainSz, ComboSz, [{flag, ?wxEXPAND}]),
+    wxSizer:add(FuncMainSz, TreeSz, [{flag, ?wxEXPAND}]),
+    wxWindow:setSizer(FuncPanel, FuncMainSz),
+    wxNotebook:addPage(Notebook, FuncPanel, "Function options"),
 
+
+    wxSizer:add(MainSz, Notebook, [{proportion, 1}, {flag, ?wxEXPAND}]),
+    OKBtn = wxButton:new(Panel, ?wxID_OK, []),
+    CancelBtn = wxButton:new(Panel, ?wxID_CANCEL, []),
+    BottomSz = wxBoxSizer:new(?wxHORIZONTAL),
+    wxSizer:add(BottomSz, CancelBtn),
+    wxSizer:add(BottomSz, OKBtn),
+    wxSizer:add(MainSz, BottomSz),
     wxWindow:setSizer(Panel, MainSz),
-    wxSizer:fit(MainSz, Dialog),
-    wxSizer:setSizeHints(MainSz, Dialog),
     
     Boxes = #boxes{send = SendBox,
 		   'receive' = RecBox,
@@ -370,25 +446,15 @@ create_traceoption_dialog(Frame, Opt, Parent) ->
 				      first_link = LinkFirstRadio},
 		   all_link = LinkAllRadio},
     
-    
-    case wxDialog:showModal(Dialog) of
-	?wxID_OK ->
-	    UpdTraceOpts2 = wx:batch(fun() ->
-					     read_trace_boxes(Boxes, Opt)
-				     end),
-	    
-	    Parent ! {updated_traceopt, UpdTraceOpts2},
-	    UpdTraceOpts2;
-	?wxID_CANCEL ->
-	    Opt
-    end.
-
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, {Dialog, Boxes}}]),
+    wxButton:connect(CancelBtn, command_button_clicked, [{userData, Dialog}]),
+    wxDialog:show(Dialog).
     
 
 top_right(Panel, TopRightSz, Options, Text) ->
     Sizer = wxBoxSizer:new(?wxVERTICAL),
     ChkBox = wxCheckBox:new(Panel, ?wxID_ANY, "Inherit on " ++ Text, []),
-    wxCheckBox:set3StateValue(ChkBox, ?wxCHK_CHECKED),
+    %% wxCheckBox:set3StateValue(ChkBox, ?wxCHK_CHECKED),
     RadioSz = wxBoxSizer:new(?wxVERTICAL),
     Radio1 = wxRadioButton:new(Panel, ?wxID_ANY, "All " ++ Text, [{style, ?wxRB_GROUP}]),
     Radio2 = wxRadioButton:new(Panel, ?wxID_ANY, "First " ++ Text ++ " only", []),
@@ -397,6 +463,7 @@ top_right(Panel, TopRightSz, Options, Text) ->
     wxSizer:add(RadioSz, Radio2, []),
     wxSizer:add(Sizer, RadioSz, [{flag, ?wxLEFT},{border, 20}]),
     wxSizer:add(TopRightSz, Sizer, Options),
+    wxCheckBox:connect(ChkBox, command_checkbox_clicked, [{userData, {ChkBox, Radio1, Radio2}}]),
     {ChkBox, Radio1, Radio2}.
 
 
@@ -428,6 +495,17 @@ read_trace_boxes(ChkBoxes = #boxes{on_spawn = OnSpawn, on_link = OnLink}, Option
 			  on_1st_spawn = On1stSpawn2,
 			  on_all_link = OnAllLink2,
 			  on_1st_link = On1stLink2}.
+
+
+enable({CheckBox, AllRadio, FirstRadio}) ->
+    case wxCheckBox:isChecked(CheckBox) of
+	false ->
+	    wxWindow:disable(AllRadio),
+	    wxWindow:disable(FirstRadio);
+	true ->
+	    wxWindow:enable(AllRadio),
+	    wxWindow:enable(FirstRadio)
+    end.
 
 
 check_box(ChkBox, Bool) ->
@@ -493,9 +571,8 @@ find_index([Sel|STail] = Selections, FunctionList, N, Acc) ->
 
 
 
-get_modmenus(Node, PidList) ->
-    ModuleList = lists:reverse(lists:sort(get_modules(Node, PidList, []))),
-    create_modmenus(ModuleList).
+get_modules(Node, PidList) ->
+    lists:sort(get_modules(Node, PidList, [])).
 get_modules(_, [], Modules) ->
     Modules;
 get_modules(Node, [Pid|Pids], Modules) ->
@@ -507,21 +584,24 @@ get_modules(Node, [Pid|Pids], Modules) ->
 	    get_modules(Node, Pids, [Module|Modules])
     end.
 
-
-create_modmenus(ModuleList) ->
-    create_modmenus(ModuleList, ?FIRST_MODULE, []).
-create_modmenus([], _, Acc) ->
-    Acc;
-create_modmenus([Module|T], Id, Acc) ->
-    create_modmenus(T, Id+1, [#create_menu{id = Id, text = atom_to_list(Module)} | Acc]).
+atomlist_to_stringlist(Modules) ->
+    [atom_to_list(X) || X <- Modules].
 
 
-find_module(Id, [#create_menu{id = SearchedId, text = Name} |T]) ->
-    case Id =:= SearchedId of
-	true ->
-	    Name;
-	false ->
-	    find_module(Id, T)
-    end.
+%% create_modmenus(ModuleList) ->
+%%     create_modmenus(ModuleList, ?FIRST_MODULE, []).
+%% create_modmenus([], _, Acc) ->
+%%     Acc;
+%% create_modmenus([Module|T], Id, Acc) ->
+%%     create_modmenus(T, Id+1, [#create_menu{id = Id, text = atom_to_list(Module)} | Acc]).
+
+
+%% find_module(Id, [#create_menu{id = SearchedId, text = Name} |T]) ->
+%%     case Id =:= SearchedId of
+%% 	true ->
+%% 	    Name;
+%% 	false ->
+%% 	    find_module(Id, T)
+%%     end.
 	    
     
