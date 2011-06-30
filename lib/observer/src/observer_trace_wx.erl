@@ -16,6 +16,7 @@
 		node,
 		parent,
 		traced_procs,
+		traced_funcs = dict:new(),
 		mod_menus}).
 
 -record(boxes, {send, 'receive', functions, events,
@@ -143,11 +144,13 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
 
 handle_event(#wx{id = Id, 
 		 event = #wxCommand{type = command_menu_selected}}, 
-	     #state{mod_menus = ModuleMenus} = State) 
+	     #state{frame = Frame, mod_menus = ModuleMenus, traced_funcs = TracedDict} = State) 
   when Id >= ?FIRST_MODULE, Id =< ?FIRST_MODULE + length(ModuleMenus) ->
+    io:format("Traced functions: ~p~n", [TracedDict]),
     ModLabel = find_module(Id, ModuleMenus),
     io:format("Du klickade på meny: ~p~n", [ModLabel]),
-    {noreply, State};
+    UpdTracedDict = create_moduleinfo(Frame, ModLabel, TracedDict),
+    {noreply, State#state{traced_funcs = UpdTracedDict}};
 
 handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
     io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
@@ -231,7 +234,13 @@ start_trace(Node, TracedProcs,
 			 MyPid ! NewMsg
 		 end,
     dbg:tracer(process, {HandlerFun, []}),
-    dbg:n(Node),
+
+    case Node =:= node() of 
+	false -> 
+	    dbg:n(Node);
+	true ->
+	    ok
+    end,
     
     Recs = [{Send, send},
 	    {Receive, 'receive'},
@@ -429,29 +438,64 @@ check_box(ChkBox, Bool) ->
 	    ignore
     end.
 
+  
+create_moduleinfo(Parent, ModuleName, TracedDict) ->
 
-
-create_moduleinfo(Parent, ModuleName) ->
     Module = list_to_atom(ModuleName),
+    Value = dict:find(Module, TracedDict),
+    TracedModFuncs = 
+	case Value of
+	    {ok, V} ->
+		V;
+	    error ->
+		[]
+	end,
+    
     [{exports, Exports} | _] = Module:module_info(),
-    NrOfExports = length(Exports),
+    Choices = lists:sort([lists:flatten(io_lib:format("~p ~p", [Name, Arity])) || {Name, Arity} <- Exports]),
+    Dialog = wxMultiChoiceDialog:new(Parent, "Select functions to trace", ModuleName, Choices),
+    Indices = find_index(TracedModFuncs, Choices),
+    wxMultiChoiceDialog:setSelections(Dialog, Indices),
+        
+    Selections = case wxMultiChoiceDialog:showModal(Dialog) of
+		     ?wxID_OK ->
+			 Index = lists:map(fun(Int) ->
+						   Int+1
+					   end,
+					   wxMultiChoiceDialog:getSelections(Dialog)),
+			 get_selections(Index, Choices);
+		     ?wxID_CANCEL ->
+			 TracedModFuncs
+		 end,
+    dict:store(Module, Selections, TracedDict).
     
-    Choices = [io_lib:format("~p,~p", [Name, Arity]) || {Name, Arity} <- Exports],
-    wxMultiChoiceDialog(Parent, "Exported functions", 
     
 
 
+get_selections(Selections, FunctionList) ->
+    get_selections(Selections, FunctionList, []).
+get_selections([], _, Acc) ->
+    Acc;
+get_selections([Int|T], FuncList, Acc) ->
+    get_selections(T, FuncList, [lists:nth(Int, FuncList) | Acc]).
 
-
-
-
+find_index(Selections, FunctionList) ->
+    find_index(Selections, FunctionList, 1, []).
+find_index(Selections, FunctionList, N, Acc) when N > length(FunctionList); Selections =:= [] ->
+    Acc;
+find_index([Sel|STail] = Selections, FunctionList, N, Acc) ->
+    case lists:nth(N, FunctionList) =:= Sel of
+	true ->
+	    find_index(STail, FunctionList, 1, [N-1|Acc]);
+	false ->
+	    find_index(Selections, FunctionList, N+1, Acc)
+    end.
 
 
 
 get_modmenus(Node, PidList) ->
-    ModuleList = get_modules(Node, PidList, []),
+    ModuleList = lists:reverse(lists:sort(get_modules(Node, PidList, []))),
     create_modmenus(ModuleList).
-    
 get_modules(_, [], Modules) ->
     Modules;
 get_modules(Node, [Pid|Pids], Modules) ->
@@ -463,9 +507,9 @@ get_modules(Node, [Pid|Pids], Modules) ->
 	    get_modules(Node, Pids, [Module|Modules])
     end.
 
+
 create_modmenus(ModuleList) ->
     create_modmenus(ModuleList, ?FIRST_MODULE, []).
-
 create_modmenus([], _, Acc) ->
     Acc;
 create_modmenus([Module|T], Id, Acc) ->
