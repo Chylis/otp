@@ -199,45 +199,35 @@ create_popup_menu() ->
     PopupMenu.
 
 
-create_list_box(Frame) ->
-    ListCtrl = wxListCtrl:new(Frame, [{style, ?wxLC_REPORT bor ?wxLC_HRULES },
+create_list_box(Panel) ->
+    ListCtrl = wxListCtrl:new(Panel, [{style, ?wxLC_REPORT bor ?wxLC_HRULES },
 				      {size, {600, 500}}]),
-    LI = wxListItem:new(),
-    wxListItem:setText(LI, "Pid"), 
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_CENTRE),
-    wxListCtrl:insertColumn(ListCtrl, 0, LI),
-    wxListItem:setText(LI, "Name or initial fun"),
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_LEFT),
-    wxListCtrl:insertColumn(ListCtrl, 1, LI),
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_CENTRE),
-    wxListItem:setText(LI, "Reds"), 
-    wxListCtrl:insertColumn(ListCtrl, 2, LI),
-    wxListItem:setText(LI, "Memory"), 
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_LEFT),
-    wxListCtrl:insertColumn(ListCtrl, 3, LI),
-    wxListItem:setText(LI, "Msgs"), 
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_LEFT),
-    wxListCtrl:insertColumn(ListCtrl, 4, LI),
-    wxListItem:setText(LI, "Current function"), 
-    wxListItem:setAlign(LI, ?wxLIST_FORMAT_LEFT),
-    wxListCtrl:insertColumn(ListCtrl, 5, LI),
-    wxListItem:destroy(LI),
-
-    wxListCtrl:setColumnWidth(ListCtrl, 0, 80),
-    wxListCtrl:setColumnWidth(ListCtrl, 1, 200),
-    wxListCtrl:setColumnWidth(ListCtrl, 2, 50),
-    wxListCtrl:setColumnWidth(ListCtrl, 3, 50),
-    wxListCtrl:setColumnWidth(ListCtrl, 4, 50),
-    wxListCtrl:setColumnWidth(ListCtrl, 5, 200),
-
+    Li = wxListItem:new(),
+    AddListEntry = fun({Name, Align, DefSize}, Col) ->
+    			   wxListItem:setText(Li, Name),
+    			   wxListItem:setAlign(Li, Align),
+    			   wxListCtrl:insertColumn(ListCtrl, Col, Li),
+    			   wxListCtrl:setColumnWidth(ListCtrl, Col, DefSize),
+    			   Col + 1
+    		   end,
+    ListItems = [{"Pid", ?wxLIST_FORMAT_CENTRE,  80},
+    		 {"Name or initial fun", ?wxLIST_FORMAT_LEFT, 200},
+		 {"Reds", ?wxLIST_FORMAT_CENTRE, 50},
+    		 {"Memory", ?wxLIST_FORMAT_LEFT, 50},
+    		 {"Msgs",  ?wxLIST_FORMAT_LEFT, 50},
+    		 {"Current function", ?wxLIST_FORMAT_LEFT,  200}
+    		],
+    lists:foldl(AddListEntry, 0, ListItems),
+    wxListItem:destroy(Li),
+    
     %%wxListCtrl:connect(ListCtrl, size, [{skip, true}]),
+    %%wxListCtrl:connect(ListCtrl, grid_cell_left_click),
+    wxListCtrl:connect(ListCtrl, size, [{skip, true}]),
     wxListCtrl:connect(ListCtrl, command_list_item_activated),
     wxListCtrl:connect(ListCtrl, command_list_item_right_click),
     wxListCtrl:connect(ListCtrl, command_list_col_click),
     wxListCtrl:connect(ListCtrl, command_list_item_selected),
-
     ListCtrl.
-%%    wxListCtrl:connect(ListCtrl, grid_cell_left_click),
 
 refresh(Info,#pro_wx_state{grid = Grid, sort_order = Sort}) ->
     wx:batch(fun() -> update_grid(Grid, Sort, Info#etop_info.procinfo) end).
@@ -603,6 +593,17 @@ handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_sele
     
     UpdState = State#pro_wx_state{tracemenu_opened = true},
     {noreply, {Config, Info, UpdState}};
+
+handle_event(#wx{event=#wxSize{size={W,_}}}, {Config, Info, #pro_wx_state{grid=Grid} = State}) ->
+    wx:batch(fun() ->
+		     Cols = wxListCtrl:getColumnCount(Grid),
+		     Last = lists:foldl(fun(I, Last) ->
+						Last - wxListCtrl:getColumnWidth(Grid, I)
+					end, W-2, lists:seq(0, Cols - 2)),
+		     Size = max(200, Last),
+		     wxListCtrl:setColumnWidth(Grid, Cols-1, Size)
+	     end),
+    {noreply, {Config, Info, State}};
 
 handle_event(#wx{event = #wxList{type = command_list_item_right_click, 
 				 itemIndex = Row}}, {Config, Info, State}) -> %Row selected

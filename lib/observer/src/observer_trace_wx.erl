@@ -149,10 +149,12 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
 
 
 handle_event(#wx{obj = ComboBox,
-		 event = #wxCommand{type = command_combobox_selected}},
+		 event = #wxCommand{type = command_combobox_selected},
+		userData = Tree},
 	     #state{frame = Frame, traced_funcs = TracedDict} = State) ->
     ChosenModule = wxComboBox:getValue(ComboBox),
     UpdTracedDict = create_moduleinfo(Frame, ChosenModule, TracedDict),
+    update_tree(Tree, UpdTracedDict),
     {noreply, State#state{traced_funcs = UpdTracedDict}};
 
 %% handle_event(#wx{id = Id, 
@@ -170,7 +172,6 @@ handle_event(#wx{id = ?wxID_OK,
 		 event = #wxCommand{type = command_button_clicked},
 		 userData = {Dialog, Boxes}}, 
 	     #state{trace_options = TraceOpts, parent = Parent} = State) ->
-    
     UpdTraceOpts = wx:batch(fun() ->
 				    read_trace_boxes(Boxes, TraceOpts)
 			    end),
@@ -195,10 +196,13 @@ handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
     {stop, shutdown, State};
 
 handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}}, 
-	     #state{trace_options = TraceOpts, traced_procs = TracedProcs, 
-		    node = Node, text_ctrl = TextCtrl, toggle_button = ToggleBtn} = State) ->
+	     #state{trace_options = TraceOpts, 
+		    traced_procs = TracedProcs,
+		    node = Node, text_ctrl = TextCtrl, 
+		    traced_funcs = TracedDict, 
+		    toggle_button = ToggleBtn} = State) ->
     
-    start_trace(Node, TracedProcs, TraceOpts),
+    start_trace(Node, TracedProcs, TracedDict, TraceOpts),
     wxTextCtrl:appendText(TextCtrl, "Start Trace:\n"),
     wxToggleButton:setLabel(ToggleBtn, "Stop Trace"),
     {noreply, State};
@@ -230,6 +234,7 @@ handle_event(#wx{event = What}, State) ->
     {noreply, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ 
 
 handle_info(Tuple, #state{text_ctrl = TxtCtrl} = State) when is_tuple(Tuple) ->
     io:format("Incoming tuple: ~p~n", [Tuple]),
@@ -261,7 +266,7 @@ handle_cast(Msg, State) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start_trace(Node, TracedProcs, 
+start_trace(Node, TracedProcs, TracedDict, 
 	    #trace_options{send = Send, treceive = Receive, functions = Functions,
 			   events = Events, on_1st_spawn = On1Spawn,
 			   on_all_spawn = AllSpawn, on_1st_link = On1Link,
@@ -272,12 +277,12 @@ start_trace(Node, TracedProcs,
 			 MyPid ! NewMsg
 		 end,
     dbg:tracer(process, {HandlerFun, []}),
-
+    
     case Node =:= node() of 
-	false -> 
-	    dbg:n(Node);
-	true ->
-	    ok
+	true -> 
+	    ok;
+	false ->
+	    dbg:n(Node)
     end,
     
     Recs = [{Send, send},
@@ -288,13 +293,16 @@ start_trace(Node, TracedProcs,
 	    {AllSpawn, set_on_spawn},
 	    {On1Link, set_on_first_link},
 	    {AllLink, set_on_link}],
-    
     Flags = [Assoc || {true, Assoc} <- Recs],
+    lists:foreach(fun(Pid) -> dbg:p(Pid, Flags) end, TracedProcs),
     
-    Trace = fun(Pid) ->
-		    dbg:p(Pid, Flags)
-	    end,
-    lists:foreach(Trace, TracedProcs).
+    case Functions of
+	true ->
+	    trace_functions(TracedDict);
+	false ->
+	    ok
+    end.
+
 
 
 textformat({died, Pid}) ->
@@ -405,16 +413,13 @@ create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
      
     AllModules = atomlist_to_stringlist(Modules),
     ModuleBox = wxComboBox:new(FuncPanel, ?wxID_ANY, [{choices, AllModules}]),
-    wxComboBox:connect(ModuleBox, command_combobox_selected),
-    
+
     TreeCtrl = wxTreeCtrl:new(FuncPanel, [{size, {500, 200}}]),
-    RootId = wxTreeCtrl:addRoot(TreeCtrl, atom_to_list(Node)),
-    Choices = atomlist_to_stringlist(dict:fetch_keys(TracedDict)),
-    lists:foreach(fun(Module) ->
-			  wxTreeCtrl:appendItem(TreeCtrl, RootId, Module)
-		  end,
-		  Choices),
-    
+    wxTreeCtrl:addRoot(TreeCtrl, atom_to_list(Node)),
+    update_tree(TreeCtrl, TracedDict), 
+		
+    wxComboBox:connect(ModuleBox, command_combobox_selected, [{userData, TreeCtrl}]),
+    wxTreeCtrl:connect(TreeCtrl, command_tree_sel_changed),
     
     wxSizer:add(ComboSz, ModuleBox, [{flag, ?wxEXPAND}]),
     wxSizer:add(TreeSz, TreeCtrl, [{flag, ?wxEXPAND},{proportion, 1}]),
@@ -529,9 +534,11 @@ create_moduleinfo(Parent, ModuleName, TracedDict) ->
 		[]
 	end,
     
-    [{exports, Exports} | _] = Module:module_info(),
-    Choices = lists:sort([lists:flatten(io_lib:format("~p ~p", [Name, Arity])) || {Name, Arity} <- Exports]),
-    Dialog = wxMultiChoiceDialog:new(Parent, "Select functions to trace", ModuleName, Choices),
+    Functions = Module:module_info(functions),
+    Choices = [lists:flatten(io_lib:format("~p ~p", [Name, Arity])) || {Name, Arity} <- Functions, 
+								       not(erl_internal:guard_bif(Name, Arity))],
+    ParsedChoices = lists:sort(parse_function_names(Choices)),
+    Dialog = wxMultiChoiceDialog:new(Parent, "Select functions to trace", ModuleName, ParsedChoices),
     Indices = find_index(TracedModFuncs, Choices),
     wxMultiChoiceDialog:setSelections(Dialog, Indices),
         
@@ -545,10 +552,12 @@ create_moduleinfo(Parent, ModuleName, TracedDict) ->
 		     ?wxID_CANCEL ->
 			 TracedModFuncs
 		 end,
-    dict:store(Module, Selections, TracedDict).
-    
-    
-
+    case Selections of
+	[] ->
+	    dict:erase(Module, TracedDict);
+	_ ->
+	    dict:store(Module, Selections, TracedDict)
+    end.
 
 get_selections(Selections, FunctionList) ->
     get_selections(Selections, FunctionList, []).
@@ -588,6 +597,35 @@ atomlist_to_stringlist(Modules) ->
     [atom_to_list(X) || X <- Modules].
 
 
+
+update_tree(Tree, Dict) ->
+    RootId = wxTreeCtrl:getRootItem(Tree),
+    wxTreeCtrl:deleteChildren(Tree, RootId),
+    FillTree = fun(KeyAtom, ValueList, acc_in) ->
+		       Module = wxTreeCtrl:appendItem(Tree, RootId, atom_to_list(KeyAtom)),
+		       lists:foreach(fun(Function) ->
+					     wxTreeCtrl:appendItem(Tree, Module, Function)
+				     end,
+				     lists:reverse(ValueList)),
+		       acc_in
+	       end,
+    dict:fold(FillTree, acc_in, Dict),
+    wxTreeCtrl:expand(Tree, RootId).
+
+trace_functions(TracedDict) ->
+    Trace = fun(KeyAtom, ValueList, acc_in) ->
+		    lists:foreach(fun(Function) ->
+					  Arity = list_to_integer([lists:last(Function)]),
+					  Func = list_to_atom(lists:sublist(Function, length(Function) - 2)),
+					  io:format("Module: ~p~n Function: ~p~n Arity: ~p~n", [KeyAtom, Func, Arity]),
+					  Res = dbg:tpl({KeyAtom, Func, Arity}, []),
+					  io:format("~p~n", [Res])
+				  end,
+				  ValueList),
+		    acc_in
+	    end,
+    dict:fold(Trace, acc_in, TracedDict).
+
 %% create_modmenus(ModuleList) ->
 %%     create_modmenus(ModuleList, ?FIRST_MODULE, []).
 %% create_modmenus([], _, Acc) ->
@@ -605,3 +643,41 @@ atomlist_to_stringlist(Modules) ->
 %%     end.
 	    
     
+
+parse_function_names(List) ->
+    parse_function_names(List, []).
+
+parse_function_names([], Acc) ->
+    lists:reverse(Acc);
+parse_function_names([ [H1|T1] = Head | Tail ], Acc) ->
+    Parsed = case is_inner_function(H1, T1) of
+		 fun_ ->
+		     "Fun: " ++ Head;
+		 lc ->
+		     "List comprehension: " ++ Head;
+		 lbc ->
+		     "Bit comprehension: " ++ Head;
+		 _ ->
+		     Head
+	     end,
+    parse_function_names(Tail, [Parsed | Acc]).
+
+
+is_inner_function(Head, Tail) when Head =:= []; Tail =:= [] ->
+    false;
+is_inner_function($', Tail) ->
+    [H|T] = Tail,
+    is_inner_function(H, T);
+is_inner_function($-, Tail) -> 
+    [_|T] = lists:dropwhile(fun(Elem) -> Elem =/= $- end, Tail),
+    Fun = lists:prefix([$f], T),
+    Lc = lists:prefix([$l,$c], T),
+    Lb = lists:prefix([$l,$b], T),   
+    if  Fun =:= true -> fun_;
+	Lc =:= true -> lc;
+	Lb =:= true -> lbc;
+	true ->
+	    false
+    end;
+is_inner_function(_, _) ->
+    false.
