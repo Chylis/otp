@@ -15,9 +15,12 @@
 		toggle_button,
 		node,
 		parent,
-		traceoptions_opened,
+		traceoptions_open,
+		module_infobox_open,
 		traced_procs,
 		traced_funcs = dict:new(),
+		checked_funcs = [],
+		tree,
 		modules}).
 
 -record(boxes, {send, 'receive', functions, events,
@@ -33,6 +36,8 @@
 -define(KILL, 7).
 -define(VIEW_MODULE, 8).
 -define(FIRST_MODULE, 9).
+-define(SELECT, 10).
+-define(SELECT_ALL, 11).
 
 
 start(Node, TracedProcs, Options, ParentFrame, ParentPid) ->
@@ -49,12 +54,14 @@ init([Options, Node, TracedProcs, ParentFrame, ParentPid]) ->
     TraceOpts = State#state.trace_options,
     TracedFuncs = State#state.traced_funcs,
     
-    create_traceoption_dialog(Frame, Node, TraceOpts, Modules, TracedFuncs),
+    Tree = create_traceoption_dialog(Frame, Node, TraceOpts, Modules, TracedFuncs),
     
     {Frame, State#state{parent = ParentPid,
 			node = Node,
 			traced_procs = TracedProcs,
-			traceoptions_opened = true,
+			traceoptions_open = true,
+			module_infobox_open = false,
+			tree = Tree,
 			modules = Modules}}.
 
 
@@ -119,10 +126,10 @@ handle_event(#wx{id = ?OPTIONS, event = #wxCommand{type = command_menu_selected}
 	     #state{frame = Frame, trace_options = TraceOpts,
 		    traced_funcs = TracedFuncs,
 		    modules = Modules, node = Node,
-		    traceoptions_opened = false} = State) ->
+		    traceoptions_open = false} = State) ->
     
     create_traceoption_dialog(Frame, Node, TraceOpts, Modules, TracedFuncs),
-    {noreply, State#state{traceoptions_opened = true}};
+    {noreply, State#state{traceoptions_open = true}};
 
 handle_event(#wx{id = ?CLEAR, event = #wxCommand{type = command_menu_selected}},
 	     #state{text_ctrl = TxtCtrl} = State) ->
@@ -149,45 +156,134 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
 
 
 handle_event(#wx{obj = ListBox,
-		 event = #wxCommand{type = command_listbox_doubleclicked},
-		userData = Tree},
-	     #state{frame = Frame, traced_funcs = TracedDict} = State) ->
+		 event = #wxCommand{type = command_listbox_doubleclicked}},
+	     #state{frame = Frame, 
+		    traced_funcs = TracedDict,
+		    module_infobox_open = false} = State) ->
+    
     ChosenModule = wxControlWithItems:getStringSelection(ListBox),
-    UpdTracedDict = create_moduleinfo(Frame, ChosenModule, TracedDict),
-    update_tree(Tree, UpdTracedDict),
-    {noreply, State#state{traced_funcs = UpdTracedDict}};
+    create_module_infobox(Frame, ChosenModule, TracedDict),
+    {noreply, State#state{module_infobox_open = true}};
 
 handle_event(#wx{obj = TxtCtrl,
 		 event = #wxCommand{type = command_text_updated},
-		 userData = ListBox},
-	     #state{modules = Modules} = State) ->
+		 userData = {ListBox, Data, Type}},
+	     #state{checked_funcs = CheckedFuncs} = State) -> 
+    
     Input = wxTextCtrl:getValue(TxtCtrl),
-    AllModules = atomlist_to_stringlist(Modules),
-    FilteredModules = lists:filter(fun(Module) ->
-				   lists:prefix(Input, Module)
-				   end,
-				   AllModules),
+    FilteredData = lists:filter(fun(Row) ->
+					lists:prefix(Input, Row)
+				end,
+				Data),
     wxListBox:clear(ListBox),
-    wxListBox:appendStrings(ListBox, FilteredModules),
+    wxListBox:appendStrings(ListBox, FilteredData),
+    
+    case Type of
+	checklistbox ->
+	    lists:foreach(fun(Index) -> wxCheckListBox:check(ListBox, Index, [{check, true}]) end,
+			  [wxControlWithItems:findString(ListBox, X) || X <- CheckedFuncs, lists:member(X, FilteredData)]);
+	listbox ->
+	    ignore
+    end,
     {noreply, State};
 
-handle_event(#wx{id = ?wxID_OK,
+handle_event(#wx{id = ?wxID_OK, %Traceoptions OK
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {Dialog, Boxes}}, 
-	     #state{trace_options = TraceOpts, parent = Parent} = State) ->
+		 userData = {trace_options, Dialog, Boxes}}, 
+	     #state{trace_options = TraceOpts, 
+		    parent = Parent} = State) ->
     UpdTraceOpts = wx:batch(fun() ->
 				    read_trace_boxes(Boxes, TraceOpts)
 			    end),
     Parent ! {updated_traceopt, UpdTraceOpts},
     wxDialog:show(Dialog, [{show, false}]),
-    {noreply, State#state{trace_options = UpdTraceOpts, traceoptions_opened = false}};
+    {noreply, State#state{trace_options = UpdTraceOpts, traceoptions_open = false}};
 
-handle_event(#wx{id = ?wxID_CANCEL,
+handle_event(#wx{id = ?wxID_OK, %Module_infobox OK
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = Dialog},
+		 userData = {module_infobox, Dialog, Module, CheckListBox, Choices}},
+	     #state{traced_funcs = TracedDict, 
+		    tree = Tree} = State) ->
+    
+    CheckedIndex1 = lists:filter(fun(Index) ->
+					wxCheckListBox:isChecked(CheckListBox, Index)
+				end,
+				lists:seq(0, wxControlWithItems:getCount(CheckListBox))),
+    
+    CheckedIndex2 = lists:map(fun(Int) ->
+				      Int+1
+			      end,
+			      CheckedIndex1),
+    Selections = get_selections(CheckedIndex2, Choices),
+    UpdTracedDict = case Selections of
+			[] ->
+			    dict:erase(Module, TracedDict);
+			_ ->
+			    dict:store(Module, Selections, TracedDict)
+		    end,
+    update_tree(Tree, UpdTracedDict),
+    wxDialog:show(Dialog, [{show, false}]),
+    {noreply, State#state{traced_funcs = UpdTracedDict,
+			  checked_funcs = [],
+			  module_infobox_open = false}};
+
+handle_event(#wx{id = ?wxID_CANCEL, %Traceoptions cancel
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {trace_options, Dialog}},
 	     State) ->
     wxDialog:show(Dialog, [{show, false}]),
-    {noreply, State#state{traceoptions_opened = false}};
+    {noreply, State#state{traceoptions_open = false}};
+
+handle_event(#wx{id = ?wxID_CANCEL, %Module_infobox cancel
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {module_infobox, Dialog}},
+	     State) ->
+    wxDialog:show(Dialog, [{show, false}]),
+    {noreply, State#state{module_infobox_open = false, checked_funcs = []}};
+
+handle_event(#wx{id = ?SELECT, %Module_infobox select/deselect
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {Bool, CheckListBox}},
+	     #state{checked_funcs = CheckedFuncs} = State) ->
+    {_, Selections} = wxListBox:getSelections(CheckListBox),
+    lists:foreach(fun(Index) -> wxCheckListBox:check(CheckListBox, Index, [{check, Bool}]) end, Selections),
+    StrSelections = [wxControlWithItems:getString(CheckListBox, N) || N <- Selections],
+    UpdCheckedFuncs = case Bool of
+			  true ->
+			      [X || X <- StrSelections,
+				    not(lists:member(X, CheckedFuncs))] ++ CheckedFuncs;
+			  false ->
+			      CheckedFuncs -- StrSelections
+		      end,
+    {noreply, State#state{checked_funcs = UpdCheckedFuncs}};
+
+handle_event(#wx{id = ?SELECT_ALL, %Module_infobox select-/deselect-all
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {Bool, CheckListBox}},
+	     State) ->
+    lists:foreach(fun(Index) -> wxCheckListBox:check(CheckListBox, Index, [{check, Bool}]) end,
+		  lists:seq(0, wxControlWithItems:getCount(CheckListBox))),
+    CheckedFuncs = case Bool of
+		       true ->
+			   [wxControlWithItems:getString(CheckListBox, N) 
+			    || N <- lists:seq(0, wxControlWithItems:getCount(CheckListBox))];
+		       false ->
+			   []
+		   end,
+    {noreply, State#state{checked_funcs = CheckedFuncs}};
+
+handle_event(#wx{obj = CheckListBox,
+		 event = #wxCommand{type = command_checklistbox_toggled,
+				    commandInt = Index}},
+	     #state{checked_funcs = CheckedFuncs} = State) ->
+    
+    UpdCheckedFuncs = case wxCheckListBox:isChecked(CheckListBox, Index) of
+			  true ->
+			      [wxControlWithItems:getString(CheckListBox, Index) | CheckedFuncs];
+			  false ->
+			      lists:delete(wxControlWithItems:getString(CheckListBox, Index), CheckedFuncs) 
+		      end,
+    {noreply, State#state{checked_funcs = UpdCheckedFuncs}};
 
 handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = UserData},
 	     State) ->
@@ -217,13 +313,6 @@ handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, command
     wxToggleButton:setLabel(ToggleBtn, "Start Trace"),
     {noreply, State};
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}}, State) ->
-%%     io:format("~p ~p, Checkbox clicked~n", [?MODULE, ?LINE]),
-%%     wx:batch(fun() -> enable(State#state.boxes#boxes.on_spawn, 
-%% 			     State#state.boxes#boxes.on_link) end),
-%%     {noreply, State};
 
 %% handle_event(#wx{id = ?wxID_SAVE, event = #wxCommand{type = command_button_clicked}}, State) -> %Bör save finnas?
 %%     File = ?MODULE:save_options(State#state.trace_options),
@@ -297,7 +386,13 @@ start_trace(Node, TracedProcs, TracedDict,
 	    {On1Link, set_on_first_link},
 	    {AllLink, set_on_link}],
     Flags = [Assoc || {true, Assoc} <- Recs],
-    lists:foreach(fun(Pid) -> dbg:p(Pid, Flags) end, TracedProcs),
+    
+    case TracedProcs of
+	all ->
+	    dbg:p(all, Flags);
+	_ ->
+	    lists:foreach(fun(Pid) -> dbg:p(Pid, Flags) end, TracedProcs)
+    end,
     
     case Functions of
 	true ->
@@ -305,8 +400,6 @@ start_trace(Node, TracedProcs, TracedDict,
 	false ->
 	    ok
     end.
-
-
 
 textformat({died, Pid}) ->
     io_lib:format("~w Process died.~n",[Pid]);
@@ -416,12 +509,11 @@ create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
     AllModules = atomlist_to_stringlist(Modules),
     ModuleTxtCtrl = wxTextCtrl:new(FuncPanel, ?wxID_ANY),
     ModuleListBox = wxListBox:new(FuncPanel, ?wxID_ANY, [{choices, AllModules}, {style, ?wxLB_SINGLE}]),
-
     TreeCtrl = wxTreeCtrl:new(FuncPanel, [{size, {500, 200}}]),
     wxTreeCtrl:addRoot(TreeCtrl, atom_to_list(Node)),
     update_tree(TreeCtrl, TracedDict), 
     
-    wxTextCtrl:connect(ModuleTxtCtrl, command_text_updated, [{userData, ModuleListBox}]),
+    wxTextCtrl:connect(ModuleTxtCtrl, command_text_updated, [{userData,  {ModuleListBox, AllModules, listbox}}]),
     wxListBox:connect(ModuleListBox, command_listbox_doubleclicked, [{userData, TreeCtrl}]),
     wxTreeCtrl:connect(TreeCtrl, command_tree_sel_changed),
     
@@ -430,7 +522,6 @@ create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
     wxSizer:add(TreeSz, TreeCtrl, [{flag, ?wxEXPAND},{proportion, 1}]),
     wxSizer:add(FuncMainSz, ModuleSz, [{flag, ?wxEXPAND}]),
     wxSizer:add(FuncMainSz, TreeSz, [{flag, ?wxEXPAND}]),
-
 
     wxWindow:setSizer(FuncPanel, FuncMainSz),
     wxNotebook:addPage(Notebook, FuncPanel, "Function options"),
@@ -456,9 +547,10 @@ create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
 				      first_link = LinkFirstRadio},
 		   all_link = LinkAllRadio},
     
-    wxButton:connect(OKBtn, command_button_clicked, [{userData, {Dialog, Boxes}}]),
-    wxButton:connect(CancelBtn, command_button_clicked, [{userData, Dialog}]),
-    wxDialog:show(Dialog).
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, {trace_options, Dialog, Boxes}}]),
+    wxButton:connect(CancelBtn, command_button_clicked, [{userData, {trace_options, Dialog}}]),
+    wxDialog:show(Dialog),
+    TreeCtrl.
     
 
 top_right(Panel, TopRightSz, Options, Text) ->
@@ -527,8 +619,7 @@ check_box(ChkBox, Bool) ->
     end.
 
   
-create_moduleinfo(Parent, ModuleName, TracedDict) ->
-
+create_module_infobox(Parent, ModuleName, TracedDict) ->
     Module = list_to_atom(ModuleName),
     Value = dict:find(Module, TracedDict),
     TracedModFuncs = 
@@ -538,31 +629,55 @@ create_moduleinfo(Parent, ModuleName, TracedDict) ->
 	    error ->
 		[]
 	end,
-    
     Functions = Module:module_info(functions),
     Choices = lists:sort([{Name, Arity} || {Name, Arity} <- Functions, not(erl_internal:guard_bif(Name, Arity))]),
     ParsedChoices = parse_function_names(Choices),
-    Dialog = wxMultiChoiceDialog:new(Parent, "Select functions to trace", ModuleName, ParsedChoices),
+
+    Dialog = wxDialog:new(Parent, ?wxID_ANY, ModuleName, [{size, {350, 400}}]),
+    Panel = wxPanel:new(Dialog),
+    MainSz = wxBoxSizer:new(?wxVERTICAL),
+    ChoiceSz = wxBoxSizer:new(?wxVERTICAL),
+    SelBtnSz = wxBoxSizer:new(?wxHORIZONTAL),
+    BtnSz = wxBoxSizer:new(?wxHORIZONTAL),
+    
+    TxtCtrl = wxTextCtrl:new(Panel, ?wxID_ANY),
+    SelBtn = wxButton:new(Panel, ?SELECT, [{label, "Select"}]),
+    DeSelBtn = wxButton:new(Panel, ?SELECT, [{label, "Deselect"}]),
+    SelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Select all"}]),
+    DeSelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Deselect all"}]),
+    CheckListBox = wxCheckListBox:new(Panel, ?wxID_ANY, [{choices, ParsedChoices}, {style, ?wxLB_EXTENDED}]),
     Indices = find_index(TracedModFuncs, Choices),
-    wxMultiChoiceDialog:setSelections(Dialog, Indices),
-        
-    Selections = case wxMultiChoiceDialog:showModal(Dialog) of
-		     ?wxID_OK ->
-			 Index = lists:map(fun(Int) ->
-						   Int+1
-					   end,
-					   wxMultiChoiceDialog:getSelections(Dialog)),
-			 
-			 get_selections(Index, Choices);
-		     ?wxID_CANCEL ->
-			 TracedModFuncs
-		 end,
-    case Selections of
-	[] ->
-	    dict:erase(Module, TracedDict);
-	_ ->
-	    dict:store(Module, Selections, TracedDict)
-    end.
+    lists:foreach(fun(X) ->  wxCheckListBox:check(CheckListBox, X) end, Indices),
+    
+    OKBtn = wxButton:new(Panel, ?wxID_OK, []),
+    CancelBtn = wxButton:new(Panel, ?wxID_CANCEL, []),
+    
+
+    wxSizer:add(SelBtnSz, SelBtn, [{flag, ?wxEXPAND}]),
+    wxSizer:add(SelBtnSz, DeSelBtn, [{flag, ?wxEXPAND}]),
+    wxSizer:add(SelBtnSz, SelAllBtn, [{flag, ?wxEXPAND}]),
+    wxSizer:add(SelBtnSz, DeSelAllBtn, [{flag, ?wxEXPAND}]),
+    wxSizer:add(ChoiceSz, TxtCtrl, [{flag, ?wxEXPAND}]),
+    wxSizer:add(ChoiceSz, SelBtnSz, [{flag, ?wxEXPAND}]),
+    wxSizer:add(ChoiceSz, CheckListBox, [{flag, ?wxEXPAND}]),
+    wxSizer:add(BtnSz, CancelBtn, [{flag, ?wxEXPAND}]),
+    wxSizer:add(BtnSz, OKBtn, [{flag, ?wxEXPAND}]),
+
+    wxSizer:add(MainSz, ChoiceSz),
+    wxSizer:add(MainSz, BtnSz, [{flag, ?wxEXPAND}]),
+    wxWindow:setSizer(Panel, MainSz),
+    Size = wxWindow:getMinSize(Dialog),
+    wxWindow:setMinSize(Dialog, Size),
+    
+    wxButton:connect(SelBtn, command_button_clicked, [{userData, {true, CheckListBox}}]),
+    wxButton:connect(DeSelBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
+    wxButton:connect(SelAllBtn, command_button_clicked, [{userData, {true, CheckListBox}}]),
+    wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, {module_infobox, Dialog, Module, CheckListBox, Choices}}]),
+    wxButton:connect(CancelBtn, command_button_clicked, [{userData, {module_infobox, Dialog}}]),
+    wxTextCtrl:connect(TxtCtrl, command_text_updated, [{userData, {CheckListBox, ParsedChoices, checklistbox}}]),
+    wxCheckListBox:connect(CheckListBox, command_checklistbox_toggled),
+    wxDialog:show(Dialog).
 
 get_selections(Selections, FunctionList) ->
     get_selections(Selections, FunctionList, []).
