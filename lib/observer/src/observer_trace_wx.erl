@@ -117,6 +117,7 @@ create_menues(MenuBar) ->
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+						%Main window
 
 handle_event(#wx{id = ?CLOSE, event = #wxCommand{type = command_menu_selected}}, State) ->
     io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
@@ -154,6 +155,33 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
     end,
     {noreply, State};
 
+handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
+    io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
+    {stop, shutdown, State};
+
+handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}}, 
+	     #state{trace_options = TraceOpts, 
+		    traced_procs = TracedProcs,
+		    node = Node, text_ctrl = TextCtrl, 
+		    traced_funcs = TracedDict, 
+		    toggle_button = ToggleBtn} = State) ->
+
+    start_trace(Node, TracedProcs, TracedDict, TraceOpts),
+    wxTextCtrl:appendText(TextCtrl, "Start Trace:\n"),
+    wxToggleButton:setLabel(ToggleBtn, "Stop Trace"),
+    {noreply, State};
+
+handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 0}}, %%Stop tracing
+	     #state{text_ctrl = TxtCtrl, 
+		    toggle_button = ToggleBtn} = State) ->
+    dbg:stop_clear(),
+    wxTextCtrl:appendText(TxtCtrl, "Stop Trace.\n"),
+    wxToggleButton:setLabel(ToggleBtn, "Start Trace"),
+    {noreply, State};
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+						%Trace option window
 
 handle_event(#wx{obj = ListBox,
 		 event = #wxCommand{type = command_listbox_doubleclicked}},
@@ -162,19 +190,22 @@ handle_event(#wx{obj = ListBox,
 		    module_infobox_open = false} = State) ->
     
     ChosenModule = wxControlWithItems:getStringSelection(ListBox),
-    create_module_infobox(Frame, ChosenModule, TracedDict),
-    {noreply, State#state{module_infobox_open = true}};
+    CheckedFuncs = create_module_infobox(Frame, ChosenModule, TracedDict),
+    {noreply, State#state{module_infobox_open = true,
+			  checked_funcs = CheckedFuncs}};
 
 handle_event(#wx{obj = TxtCtrl,
 		 event = #wxCommand{type = command_text_updated},
 		 userData = {ListBox, Data, Type}},
 	     #state{checked_funcs = CheckedFuncs} = State) -> 
-    
+        
     Input = wxTextCtrl:getValue(TxtCtrl),
-    FilteredData = lists:filter(fun(Row) ->
-					lists:prefix(Input, Row)
-				end,
-				Data),
+    FilteredData = [X || X <- Data, re:run(X, Input) =/= nomatch],
+    io:format("FilteredData: ~p~n", [FilteredData]),
+    %% FilteredData = lists:filter(fun(Row) ->
+    %% 					lists:prefix(Input, Row)
+    %% 				end,
+    %% 				Data),
     wxListBox:clear(ListBox),
     wxListBox:appendStrings(ListBox, FilteredData),
     
@@ -199,22 +230,49 @@ handle_event(#wx{id = ?wxID_OK, %Traceoptions OK
     wxDialog:show(Dialog, [{show, false}]),
     {noreply, State#state{trace_options = UpdTraceOpts, traceoptions_open = false}};
 
+handle_event(#wx{id = ?wxID_CANCEL, %Traceoptions cancel
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = {trace_options, Dialog}},
+	     State) ->
+    wxDialog:show(Dialog, [{show, false}]),
+    {noreply, State#state{traceoptions_open = false}};
+
+handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = UserData},
+	     State) ->
+    enable(UserData),
+    {noreply, State};
+
+handle_event(#wx{obj = Tree, event = #wxTree{type = command_tree_item_activated,
+					     item = Item}},
+	     #state{frame = Frame, 
+		    traced_funcs = TracedDict,
+		    module_infobox_open = false} = State) ->
+    case wxTreeCtrl:getItemParent(Tree, Item) =:= wxTreeCtrl:getRootItem(Tree) of
+	true ->
+	    ChosenModule = wxTreeCtrl:getItemText(Tree, Item),
+	    CheckedFuncs = create_module_infobox(Frame, ChosenModule, TracedDict),
+	    {noreply, State#state{module_infobox_open = true,
+				  checked_funcs = CheckedFuncs}};
+	false ->
+	    {noreply, State}
+    end;
+%% handle_event(#wx{id = ?wxID_SAVE, event = #wxCommand{type = command_button_clicked}}, State) -> %Bör save finnas?
+%%     File = ?MODULE:save_options(State#state.trace_options),
+%%     State#state.parent ! {save, File},
+%%     {noreply, State};
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+						%Module infobox
+
 handle_event(#wx{id = ?wxID_OK, %Module_infobox OK
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {module_infobox, Dialog, Module, CheckListBox, Choices}},
+		 userData = {module_infobox, Dialog, Module, ParsedChoices, Choices}},
 	     #state{traced_funcs = TracedDict, 
-		    tree = Tree} = State) ->
+		    tree = Tree,
+		    checked_funcs = CheckedFuncs} = State) ->
     
-    CheckedIndex1 = lists:filter(fun(Index) ->
-					wxCheckListBox:isChecked(CheckListBox, Index)
-				end,
-				lists:seq(0, wxControlWithItems:getCount(CheckListBox))),
-    
-    CheckedIndex2 = lists:map(fun(Int) ->
-				      Int+1
-			      end,
-			      CheckedIndex1),
-    Selections = get_selections(CheckedIndex2, Choices),
+    Indices = [I+1 || I <- find_index(CheckedFuncs, ParsedChoices)],
+    Selections = get_selections(Indices, Choices),
     UpdTracedDict = case Selections of
 			[] ->
 			    dict:erase(Module, TracedDict);
@@ -226,13 +284,6 @@ handle_event(#wx{id = ?wxID_OK, %Module_infobox OK
     {noreply, State#state{traced_funcs = UpdTracedDict,
 			  checked_funcs = [],
 			  module_infobox_open = false}};
-
-handle_event(#wx{id = ?wxID_CANCEL, %Traceoptions cancel
-		 event = #wxCommand{type = command_button_clicked},
-		 userData = {trace_options, Dialog}},
-	     State) ->
-    wxDialog:show(Dialog, [{show, false}]),
-    {noreply, State#state{traceoptions_open = false}};
 
 handle_event(#wx{id = ?wxID_CANCEL, %Module_infobox cancel
 		 event = #wxCommand{type = command_button_clicked},
@@ -285,48 +336,14 @@ handle_event(#wx{obj = CheckListBox,
 		      end,
     {noreply, State#state{checked_funcs = UpdCheckedFuncs}};
 
-handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = UserData},
-	     State) ->
-    enable(UserData),
-    {noreply, State};
 
-handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
-    io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
-    {stop, shutdown, State};
-
-handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}}, 
-	     #state{trace_options = TraceOpts, 
-		    traced_procs = TracedProcs,
-		    node = Node, text_ctrl = TextCtrl, 
-		    traced_funcs = TracedDict, 
-		    toggle_button = ToggleBtn} = State) ->
-    
-    start_trace(Node, TracedProcs, TracedDict, TraceOpts),
-    wxTextCtrl:appendText(TextCtrl, "Start Trace:\n"),
-    wxToggleButton:setLabel(ToggleBtn, "Stop Trace"),
-    {noreply, State};
-
-handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 0}}, %%Stop tracing
-	     #state{text_ctrl = TxtCtrl, toggle_button = ToggleBtn} = State) ->
-    dbg:stop_clear(),
-    wxTextCtrl:appendText(TxtCtrl, "Stop Trace.\n"),
-    wxToggleButton:setLabel(ToggleBtn, "Start Trace"),
-    {noreply, State};
-
-
-%% handle_event(#wx{id = ?wxID_SAVE, event = #wxCommand{type = command_button_clicked}}, State) -> %Bör save finnas?
-%%     File = ?MODULE:save_options(State#state.trace_options),
-%%     State#state.parent ! {save, File},
-%%     {noreply, State};
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_event(#wx{event = What}, State) ->
     io:format("~p~p: Unhandled event: ~p ~n", [?MODULE, self(), What]),
     {noreply, State}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- 
 
 handle_info(Tuple, #state{text_ctrl = TxtCtrl} = State) when is_tuple(Tuple) ->
     io:format("Incoming tuple: ~p~n", [Tuple]),
@@ -515,7 +532,7 @@ create_traceoption_dialog(Frame, Node, Opt, Modules, TracedDict) ->
     
     wxTextCtrl:connect(ModuleTxtCtrl, command_text_updated, [{userData,  {ModuleListBox, AllModules, listbox}}]),
     wxListBox:connect(ModuleListBox, command_listbox_doubleclicked, [{userData, TreeCtrl}]),
-    wxTreeCtrl:connect(TreeCtrl, command_tree_sel_changed),
+    wxTreeCtrl:connect(TreeCtrl, command_tree_item_activated),
     
     wxSizer:add(ModuleSz, ModuleTxtCtrl, [{flag, ?wxEXPAND}]),
     wxSizer:add(ModuleSz, ModuleListBox, [{flag, ?wxEXPAND}]),
@@ -648,11 +665,11 @@ create_module_infobox(Parent, ModuleName, TracedDict) ->
     CheckListBox = wxCheckListBox:new(Panel, ?wxID_ANY, [{choices, ParsedChoices}, {style, ?wxLB_EXTENDED}]),
     Indices = find_index(TracedModFuncs, Choices),
     lists:foreach(fun(X) ->  wxCheckListBox:check(CheckListBox, X) end, Indices),
+    Selections = [wxControlWithItems:getString(CheckListBox, I) || I <- Indices],
     
     OKBtn = wxButton:new(Panel, ?wxID_OK, []),
     CancelBtn = wxButton:new(Panel, ?wxID_CANCEL, []),
     
-
     wxSizer:add(SelBtnSz, SelBtn, [{flag, ?wxEXPAND}]),
     wxSizer:add(SelBtnSz, DeSelBtn, [{flag, ?wxEXPAND}]),
     wxSizer:add(SelBtnSz, SelAllBtn, [{flag, ?wxEXPAND}]),
@@ -673,11 +690,13 @@ create_module_infobox(Parent, ModuleName, TracedDict) ->
     wxButton:connect(DeSelBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
     wxButton:connect(SelAllBtn, command_button_clicked, [{userData, {true, CheckListBox}}]),
     wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
-    wxButton:connect(OKBtn, command_button_clicked, [{userData, {module_infobox, Dialog, Module, CheckListBox, Choices}}]),
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, {module_infobox, Dialog, Module, ParsedChoices, Choices}}]),
     wxButton:connect(CancelBtn, command_button_clicked, [{userData, {module_infobox, Dialog}}]),
     wxTextCtrl:connect(TxtCtrl, command_text_updated, [{userData, {CheckListBox, ParsedChoices, checklistbox}}]),
     wxCheckListBox:connect(CheckListBox, command_checklistbox_toggled),
-    wxDialog:show(Dialog).
+    wxDialog:show(Dialog),
+    Selections.
+    
 
 get_selections(Selections, FunctionList) ->
     get_selections(Selections, FunctionList, []).
