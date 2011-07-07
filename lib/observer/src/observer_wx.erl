@@ -346,15 +346,15 @@ create_popup_dialog(Msg, Title, #state{frame = Frame}) ->
     wxDialog:showModal(Popup).
 
 default_menus(NodesMenuItems) ->
-    FileMenu = {"File", [#create_menu{id = ?wxID_EXIT, text = "&Quit"}]},
-    HelpMenu = {"Help", [#create_menu{id = ?wxID_HELP, text = "&Help"}]},
+    FileMenu = {"File", [#create_menu{id = ?wxID_EXIT, text = "Quit"}]},
+    HelpMenu = {"Help", [#create_menu{id = ?wxID_HELP, text = "Help"}]},
     NodeMenu = case erlang:is_alive() of
 		   true ->
 		       {"Nodes", NodesMenuItems ++
-			    [#create_menu{id = ?ID_PING, text = "&Connect Node"}]};
+			    [#create_menu{id = ?ID_PING, text = "Connect Node"}]};
 		   false ->
 		       {"Nodes", NodesMenuItems ++
-			    [#create_menu{id = ?ID_CONNECT, text = "&Enable distribution"}]}
+			    [#create_menu{id = ?ID_CONNECT, text = "Enable distribution"}]}
 	       end,
     [FileMenu, NodeMenu, HelpMenu].
 
@@ -430,9 +430,9 @@ update_node_list(State = #state{menubar=MenuBar}) ->
     
     case erlang:is_alive() of
 	true ->
-	    create_menu_item(#create_menu{id = ?ID_PING, text = "&Connect node"}, NodeMenu);
+	    create_menu_item(#create_menu{id = ?ID_PING, text = "Connect node"}, NodeMenu);
 	false ->
-	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "&Enable distribution"}, NodeMenu)
+	    create_menu_item(#create_menu{id = ?ID_CONNECT, text = "Enable distribution"}, NodeMenu)
     end,
     State#state{nodes = Nodes}.
 

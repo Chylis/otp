@@ -175,16 +175,16 @@ setup(Notebook, Parent) ->
 
 create_pro_menu(Parent) ->
     MenuEntries = [{"View",
-		    [#create_menu{id = ?ID_REFRESH, text = "&Refresh"},
-		     #create_menu{id = ?ID_SYSHIDE, text = "&Hide system processes"},
-		     #create_menu{id = ?ID_HIDENEW, text = "&Auto-hide new"}]},
-		   {"&Options",
-		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "&Dump to file"},
-		     #create_menu{id = ?ID_OPTIONS, text = "&Options"},
-		     #create_menu{id = ?ID_SAVE_OPT, text = "&Save options..."}]},
-		   {"&Trace",
-		    [#create_menu{id = ?ID_TRACEMENU, text = "&Trace selected processes"},
-		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "&Trace all processes"}]}
+		    [#create_menu{id = ?ID_REFRESH, text = "Refresh"},
+		     #create_menu{id = ?ID_SYSHIDE, text = "Hide system processes"},
+		     #create_menu{id = ?ID_HIDENEW, text = "Auto-hide new"}]},
+		   {"Options",
+		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"},
+		     #create_menu{id = ?ID_OPTIONS, text = "Options"},
+		     #create_menu{id = ?ID_SAVE_OPT, text = "Save options..."}]},
+		   {"Trace",
+		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
+		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"}]}
 		  ],
     observer_wx:create_menus(Parent, MenuEntries).
 
