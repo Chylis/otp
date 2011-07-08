@@ -42,6 +42,7 @@
 	  parent,
 	  frame,
 	  grid,
+	  status,
 	  node=node(),
 	  columns,
 	  pid,
@@ -75,30 +76,31 @@ init([Parent, Opts]) ->
     Icon = wxIcon:new(IconFile, [{type,?wxBITMAP_TYPE_PNG}]),
     wxFrame:setIcon(Frame, Icon),
     wxIcon:destroy(Icon),
-
+    StatusBar = wxFrame:createStatusBar(Frame, []),
     try
 	TabId = table_id(Table),
 	ColumnNames = column_names(Node, Source, TabId),
 	KeyPos = key_pos(Node, Source, TabId),
-	
+
 	Attrs = create_attrs(),
 
 	Self = self(),
-	Holder = spawn_link(fun() ->  
-				    init_table_holder(Self, Table, Source, 
-						      length(ColumnNames), Node, Attrs) 
+	Holder = spawn_link(fun() ->
+				    init_table_holder(Self, Table, Source,
+						      length(ColumnNames), Node, Attrs)
 			    end),
 
 	Panel = wxPanel:new(Frame),
 	Sizer = wxBoxSizer:new(?wxVERTICAL),
 	Style = ?wxLC_REPORT bor ?wxLC_VIRTUAL bor ?wxLC_SINGLE_SEL bor ?wxLC_HRULES,
 	Grid = wxListCtrl:new(Panel, [{style, Style},
-				      {onGetItemText, 
+				      {onGetItemText,
 				       fun(_, Item,Col) -> get_row(Holder, Item, Col+1) end},
-				      {onGetItemAttr, 
+				      {onGetItemAttr,
 				       fun(_, Item) -> get_attr(Holder, Item) end}
 				     ]),
 	wxListCtrl:connect(Grid, command_list_item_activated),
+	wxListCtrl:connect(Grid, command_list_item_selected),
 	wxListCtrl:connect(Grid, command_list_col_click),
 	wxListCtrl:connect(Grid, size, [{skip, true}]),
 	wxWindow:setFocus(Grid),
@@ -109,7 +111,8 @@ init([Parent, Opts]) ->
 
 	Cols = add_columns(Grid, 0, ColumnNames),
 	wxFrame:show(Frame),
-	{Panel, #state{frame=Frame, grid=Grid, parent=Parent, columns=Cols,
+	{Panel, #state{frame=Frame, grid=Grid, status=StatusBar,
+		       parent=Parent, columns=Cols,
 		       pid=Holder, source=Source, tab=Table#tab{keypos=KeyPos},
 		       attrs=Attrs}}
     catch node_or_table_down ->
@@ -149,6 +152,13 @@ handle_event(#wx{event=#wxSize{size={W,_}}},  State=#state{grid=Grid}) ->
 	     end),
     {noreply, State};
 
+handle_event(#wx{event=#wxList{type=command_list_item_selected, itemIndex=Index}},
+	     State = #state{pid=Pid, grid=Grid, status=StatusBar}) ->
+    N = wxListCtrl:getItemCount(Grid),
+    Str = get_row(Pid, Index, all),
+    wxStatusBar:setStatusText(StatusBar, io_lib:format("Objects: ~w: ~s",[N, Str])),
+    {noreply, State};
+
 handle_event(Event, State) ->
     io:format("~p:~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
@@ -165,8 +175,9 @@ handle_cast(Event, State) ->
     io:format("~p:~p, handle cast ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
 
-handle_info({no_rows, N}, State = #state{grid=Grid}) ->
+handle_info({no_rows, N}, State = #state{grid=Grid, status=StatusBar}) ->
     wxListCtrl:setItemCount(Grid, N),
+    wxStatusBar:setStatusText(StatusBar, io_lib:format("Objects: ~w",[N])),
     {noreply, State};
 handle_info({new_cols, New}, State = #state{grid=Grid, columns=Cols0}) ->
     Cols = add_columns(Grid, Cols0, New),
@@ -224,8 +235,8 @@ init_table_holder(Parent, Table, MnesiaOrEts, Cols, Node, Attrs) ->
 		Id -> Id
 	    end,
     Pid = rpc:call(Node, ?MODULE, get_table, [self(), TabId, MnesiaOrEts]),
-    table_holder(#holder{node=Node, parent=Parent, pid=Pid, 
-			 source=MnesiaOrEts, columns=Cols, 
+    table_holder(#holder{node=Node, parent=Parent, pid=Pid,
+			 source=MnesiaOrEts, columns=Cols,
 			 attrs=Attrs}).
 
 table_holder(S0 = #holder{pid=Pid, table=Table, attrs=Attrs}) ->
@@ -289,9 +300,11 @@ sort(Col, _, Table) ->
 
 get_row(From, Row, Col, Table) ->
     case lists:nth(Row+1, Table) of
+	Object when Col =:= all ->
+	    From ! {self(), io_lib:format("~w", [Object])};
 	Object when tuple_size(Object) >= Col ->
 	    From ! {self(), io_lib:format("~w", [element(Col, Object)])};
-	_ -> 
+	_ ->
 	    From ! {self(), ""}
     end.
 
@@ -359,7 +372,7 @@ key_pos(Node, ets, TabId) ->
 
 create_attrs() ->
     Font = wxSystemSettings:getFont(?wxSYS_DEFAULT_GUI_FONT),
-    Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),    
+    Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),
     #attrs{even = wx:typeCast(wx:null(), wxListItemAttr),
 	   odd  = wxListItemAttr:new(Text, {240,240,255}, Font),
 	   deleted = wxListItemAttr:new({240,30,30}, {10,10,10}, Font),
