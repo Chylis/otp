@@ -65,6 +65,11 @@ create_menus(Object, Menus) when is_list(Menus) ->
 init(_Args) ->
     wx:new(),
     Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Observer", [{size, {1000, 500}}]),
+    IconFile = filename:join(code:priv_dir(observer), "erlang_observer.png"),
+    Icon = wxIcon:new(IconFile, [{type,?wxBITMAP_TYPE_PNG}]),
+    wxFrame:setIcon(Frame, Icon),
+    wxIcon:destroy(Icon),
+
     State = #state{frame = Frame},
     UpdState = setup(State),
     wxFrame:show(Frame),

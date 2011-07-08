@@ -30,6 +30,7 @@
 -behaviour(wx_object).
 -include_lib("wx/include/wx.hrl").
 -include("observer_defs.hrl").
+-include("observer_tv.hrl").
 
 -define(GRID, 500).
 -define(ID_REFRESH, 401).
@@ -38,13 +39,7 @@
 -define(ID_UNREADABLE, 404).
 -define(ID_SYSTEM_TABLES, 405).
 
--record(tab, {name,
-	      id = ignore,
-	      size,
-	      owner,
-	      reg_name,
-	      readable = true
-	     }).
+-define(TC(Cmd), tc(fun() -> Cmd end, ?MODULE, ?LINE)).
 
 -record(opt, {type=ets,
 	      sys_hidden=true,
@@ -58,7 +53,8 @@
 	  parent,
 	  grid,
 	  node=node(),
-	  opt=#opt{}
+	  opt=#opt{},
+	  tabs
 	}).
 
 start_link(Notebook,  Parent) ->
@@ -90,20 +86,17 @@ init([Notebook, Parent]) ->
     wxListItem:destroy(Li),
 
     wxListCtrl:connect(Grid, command_list_item_activated),
-    %% wxListCtrl:connect(Grid, command_list_item_selected),
     wxListCtrl:connect(Grid, command_list_col_click),
     wxListCtrl:connect(Grid, size, [{skip, true}]),
-    %% wxListCtrl:connect(Grid, key_up, [{id, ?GRID}, {skip,true}]),
 
-    %% wxWindow:connect(Panel, enter_window, [{skip,true}]),
     wxWindow:setFocus(Grid),
     {Panel, #state{grid=Grid, parent=Parent}}.
 
 handle_event(#wx{id=?ID_REFRESH},
 	     State = #state{node=Node, grid=Grid, opt=Opt}) ->
     Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
-    {noreply, State};
+    Tabs = update_grid(Grid, Opt, Tables),
+    {noreply, State#state{tabs=Tabs}};
 
 handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	     State = #state{node=Node, grid=Grid,
@@ -112,10 +105,10 @@ handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	      Key -> Opt0#opt{sort_incr=not Bool};
 	      NewKey -> Opt0#opt{sort_key=NewKey}
 	  end,
-    Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
+    Tables = ?TC(get_tables(Node, Opt)),
+    Tabs = ?TC(update_grid(Grid, Opt, Tables)),
     wxWindow:setFocus(Grid),
-    {noreply, State#state{opt=Opt}};
+    {noreply, State#state{opt=Opt, tabs=Tabs}};
 
 handle_event(#wx{id=Id}, State = #state{node=Node, grid=Grid, opt=Opt0})
   when Id >= ?ID_ETS, Id =< ?ID_SYSTEM_TABLES ->
@@ -125,10 +118,10 @@ handle_event(#wx{id=Id}, State = #state{node=Node, grid=Grid, opt=Opt0})
 	      ?ID_UNREADABLE -> Opt0#opt{unread_hidden= not Opt0#opt.unread_hidden};
 	      ?ID_SYSTEM_TABLES -> Opt0#opt{sys_hidden= not Opt0#opt.sys_hidden}
 	  end,
-    Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
+    Tables = ?TC(get_tables(Node, Opt)),
+    Tabs = ?TC(update_grid(Grid, Opt, Tables)),
     wxWindow:setFocus(Grid),
-    {noreply, State#state{opt=Opt}};
+    {noreply, State#state{opt=Opt, tabs=Tabs}};
 
 handle_event(#wx{event=#wxSize{size={W,_}}},  State=#state{grid=Grid}) ->
     wx:batch(fun() ->
@@ -139,6 +132,16 @@ handle_event(#wx{event=#wxSize{size={W,_}}},  State=#state{grid=Grid}) ->
 		     Size = max(200, Last),
 		     wxListCtrl:setColumnWidth(Grid, Cols-1, Size)
 	     end),
+    {noreply, State};
+
+handle_event(#wx{obj=Grid, 
+		 event=_Ev=#wxList{type=command_list_item_activated, 
+				   itemIndex=Index}},
+	     State=#state{grid=Grid, node=Node, opt=#opt{type=Type}, tabs=Tabs}) ->
+    %% TableName = wxListCtrl:getItemText(Grid, Index),
+    %% io:format("\rSelected: ~p ~p~n ~p => ~p~n",[Index, TableName, _Ev, lists:nth(Index+1, Tabs)]),
+    Table = lists:nth(Index+1, Tabs),
+    observer_tv_table:start_link(Grid, [{node,Node}, {type,Type}, {table,Table}]),
     {noreply, State};
 
 handle_event(Event, State) ->
@@ -159,16 +162,16 @@ handle_cast(Event, State) ->
 
 handle_info({active, Node}, State = #state{parent=Parent, grid=Grid, opt=Opt}) ->
     Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
+    Tabs = update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
     create_menus(Parent),
-    {noreply, State#state{node=Node}};
+    {noreply, State#state{node=Node, tabs=Tabs}};
 
 handle_info({node, Node}, State = #state{grid=Grid, opt=Opt}) ->
     Tables = get_tables(Node, Opt),
-    update_grid(Grid, Opt, Tables),
+    Tabs = update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
-    {noreply, State#state{node=Node}};
+    {noreply, State#state{node=Node, tabs=Tabs}};
 
 handle_info(Event, State) ->
     io:format("~p:~p, handle info ~p\n", [?MODULE, ?LINE, Event]),
@@ -318,7 +321,7 @@ update_grid2(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
     Update =
 	fun(#tab{name = Name, id = Id, owner = Owner, size = Size,
 		 readable = Readable, reg_name = RegName}, Row) ->
-		wxListCtrl:insertItem(Grid, Row, ""),
+		_Item = wxListCtrl:insertItem(Grid, Row, ""),
 		if (Row rem 2) =:= 0 ->
 			wxListCtrl:setItemBackgroundColour(Grid, Row, {240,240,255});
 		   true -> ignore
@@ -333,6 +336,7 @@ update_grid2(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
 				      wxListCtrl:setItem(Grid, Row, Col, to_str(Val))
 			      end,
 			      [{0,Name}, {1,Id}, {2,Size}, {3,Owner},{4,RegName}]),
+		%% wxListCtrl:setItemData(Grid, Item, Item),
 		Row + 1
 	end,
     ProcInfo = case Dir of
@@ -340,7 +344,12 @@ update_grid2(Grid, #opt{sort_key=Sort,sort_incr=Dir}, Tables) ->
 		   true -> lists:keysort(Sort, Tables)
 	       end,
     lists:foldl(Update, 0, ProcInfo),
-    ok.
+    ProcInfo.
 
 ignore(true, Reason) -> throw(Reason);
 ignore(_,_ ) -> ok.
+
+tc(Fun, Mod, Line) ->
+    {Time, Res} = timer:tc(Fun),
+    io:format("~p:~p: ~wus~n",[Mod,Line, Time]),
+    Res.
