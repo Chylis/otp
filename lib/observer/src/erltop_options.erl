@@ -100,10 +100,10 @@ create_window(Opt, ProcessInfo, Interval, Wx) ->
 
     Where = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label,"Trace output options:"}]),
     Radio5 = wxRadioButton:new(Panel, ?wxID_ANY, "In window", [{style, ?wxRB_GROUP}]),
-    wxRadioButton:setValue(Radio5, Opt#trace_options.in_window),
+    %% wxRadioButton:setValue(Radio5, Opt#trace_options.in_window),
     ToFile = wxBoxSizer:new(?wxHORIZONTAL),
     Radio6 = wxRadioButton:new(Panel, ?wxID_ANY, "To file    ", []),
-    wxRadioButton:setValue(Radio6, Opt#trace_options.to_file),
+    %% wxRadioButton:setValue(Radio6, Opt#trace_options.to_file),
     FileInput = wxTextCtrl:new(Panel, ?wxID_ANY, [{size, {142, -1}}]),
     BrowseButton = wxButton:new(Panel, ?wxID_ANY, [{label, "Browse"}]),
 
@@ -288,10 +288,10 @@ read_trace_boxes(ChkBoxes = #boxes{on_spawn = OnSpawn, on_link = OnLink}, Option
 			  on_all_spawn = OnAllSpawn2,
 			  on_1st_spawn = On1stSpawn2,
 			  on_all_link = OnAllLink2,
-			  on_1st_link = On1stLink2,
+			  on_1st_link = On1stLink2}.
 			  
-			  in_window = wxRadioButton:getValue(ChkBoxes#boxes.in_window),
-			  to_file = wxRadioButton:getValue(ChkBoxes#boxes.to_file)}.
+			  %% in_window = wxRadioButton:getValue(ChkBoxes#boxes.in_window),
+			  %% to_file = wxRadioButton:getValue(ChkBoxes#boxes.to_file)}.
 
 read_process_info_boxes(ProcInfoBoxes) ->
     Filter =
@@ -358,13 +358,13 @@ loop(State = #state{boxes = Boxes}) ->
 		end,
 
 	    
-	    case Trace#trace_options.to_file of
-		true ->
-		    File = filename:join(os:getenv("HOME"), ".erlang_tools/obstop.log"),
-		    State#state.parent ! {checked, Trace#trace_options{file = File}, Atoms, Interval};
-		false ->
-		    State#state.parent ! {checked, Trace, Atoms, Interval}
-	    end,
+	    %% case Trace#trace_options.to_file of
+	    %% 	true ->
+	    %% 	    File = filename:join(os:getenv("HOME"), ".erlang_tools/obstop.log"),
+	    %% 	    State#state.parent ! {checked, Trace#trace_options{file = File}, Atoms, Interval};
+	    %% 	false ->
+	    %% 	    State#state.parent ! {checked, Trace, Atoms, Interval}
+	    %% end,
 	    exit(shutdown);
 	Any ->
 	    io:format("~p~p: received unexpected message: ~p\n", [?MODULE, self(), Any]),
