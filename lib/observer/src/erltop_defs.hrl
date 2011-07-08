@@ -40,12 +40,9 @@
 			on_all_spawn = false,
 			on_1st_link  = true,
 			on_all_link  = false,
-			in_window    = true,
-			to_file      = false,
-			file         = "",
 			main_window  = true}).
--record(on_spawn, {checkbox, radio1, radio2}).
--record(on_link, {checkbox, radio1, radio2}).
+-record(on_spawn, {checkbox, all_spawn, first_spawn}).
+-record(on_link, {checkbox, all_link, first_link}).
 
 -record(pid, {window, traced}).
 

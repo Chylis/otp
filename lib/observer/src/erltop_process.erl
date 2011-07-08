@@ -273,14 +273,14 @@ window_loop(State) ->
 	    Checked = State#state.trace_options,
 	    Node = State#state.node,
 	    TracedProcs = State#state.traced_procs,
-	    State2 = 
-		case Checked#trace_options.to_file of
-		    false ->
-			State;
-		    true ->
-			{ok, IODevice} = file:open(Checked#trace_options.file, [append]),
-			State#state{io_device = IODevice}
-		end,
+	    State2 = State,
+		%% case Checked#trace_options.to_file of
+		%%     false ->
+		%% 	State;
+		%%     true ->
+		%% 	{ok, IODevice} = file:open(Checked#trace_options.file, [append]),
+		%% 	State#state{io_device = IODevice}
+		%% end,
 	    TracedProcs2 = set_trace(Node, State2#state.trace_options, true, State2#state.process, TracedProcs),
 	    wxTextCtrl:appendText(State2#state.text_ctrl, "Start Trace:\n"),
 	    wxToggleButton:setLabel(State2#state.toggle_button, "Stop Trace"),
@@ -290,12 +290,12 @@ window_loop(State) ->
 	    Checked = State#state.trace_options,
 	    Node = State#state.node,
 	    TracedProcs = State#state.traced_procs,
-	    case Checked#trace_options.to_file of
-		false ->
-		    ignore;
-		true ->
-		    file:close(State#state.io_device)
-	    end,
+	    %% case Checked#trace_options.to_file of
+	    %% 	false ->
+	    %% 	    ignore;
+	    %% 	true ->
+	    %% 	    file:close(State#state.io_device)
+	    %% end,
 	    TracedProcs2 = set_trace(Node, State#state.trace_options, false, State#state.process, TracedProcs),
 	    wxTextCtrl:appendText(State#state.text_ctrl, "Stop Trace.\n"),
 	    wxToggleButton:setLabel(State#state.toggle_button, "Start Trace"),
@@ -314,12 +314,12 @@ window_loop(State) ->
 	    io:format("incoming~n"),
 	    Checked = State#state.trace_options,
 	    Text = textformat(Tuple),
-	    case Checked#trace_options.to_file of
-		false ->
-		    wxTextCtrl:appendText(State#state.text_ctrl, lists:flatten(Text));
-		true ->
-		    file:write(State#state.io_device, list_to_binary(lists:flatten(Text)))
-	    end,
+	    %% case Checked#trace_options.to_file of
+	    %% 	false ->
+	    %% 	    wxTextCtrl:appendText(State#state.text_ctrl, lists:flatten(Text));
+	    %% 	true ->
+	    %% 	    file:write(State#state.io_device, list_to_binary(lists:flatten(Text)))
+	    %% end,
 	    ?MODULE:window_loop(State);
 %%%-----------------------------------------------------------------
 	Any ->
@@ -398,10 +398,8 @@ info_id_to_item(Id) ->
     end.
 
 set_trace(_, _, false, Process, TracedProcs) ->
-    io:format("inne~n"),
     dbg:stop_clear(),
     {traced, ToRemove} = get_traced_pid(Process, TracedProcs),
-    io:format("ToRemove: ~p, TracedProcs: ~p~n", [ToRemove, TracedProcs]),
     UpdTracedProcs = remove_traced_pid(ToRemove, TracedProcs),
     io:format("~p~n", [UpdTracedProcs]),
     

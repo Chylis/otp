@@ -150,7 +150,7 @@ create_info_label(Panel, Sizer, Msg) ->
     WxText.
 
 create_sys_menu(Parent) ->
-    View = {"View", [#create_menu{id = ?ID_REFRESH, text = "&Refresh"}]},
+    View = {"View", [#create_menu{id = ?ID_REFRESH, text = "Refresh"}]},
     observer_wx:create_menus(Parent, [View]).
     
 update_syspage(Notebook, #sys_wx_state{node = Node} = State) ->
