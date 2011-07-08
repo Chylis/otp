@@ -49,12 +49,13 @@
 -define(ID_DUMP_TO_FILE, 204).
 -define(ID_TRACEMENU, 208).
 -define(ID_TRACE_ALL_MENU, 209).
--define(ID_OPTIONS, 210).
--define(ID_SAVE_OPT, 211).
--define(ID_MODULE_INFO, 212).
--define(OK, 213).
--define(ID_SYSHIDE, 214).
--define(ID_HIDENEW, 215).
+-define(ID_TRACE_NEW_MENU, 210).
+-define(ID_OPTIONS, 211).
+-define(ID_SAVE_OPT, 212).
+-define(ID_MODULE_INFO, 213).
+-define(OK, 214).
+-define(ID_SYSHIDE, 215).
+-define(ID_HIDENEW, 216).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -184,7 +185,8 @@ create_pro_menu(Parent) ->
 		     #create_menu{id = ?ID_SAVE_OPT, text = "Save options..."}]},
 		   {"Trace",
 		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
-		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"}]}
+		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"},
+		     #create_menu{id = ?ID_TRACE_NEW_MENU, text = "Trace new processes"}]}
 		  ],
     observer_wx:create_menus(Parent, MenuEntries).
 
@@ -608,6 +610,21 @@ handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu
 			    Frame,
 			    self()),
     {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
+
+
+handle_event(#wx{id = ?ID_TRACE_NEW_MENU, event = #wxCommand{type = command_menu_selected}},
+	     {#opts{node = Node} = Config, Info, 
+	      #pro_wx_state{trace_options = Options,
+			    tracemenu_opened = false,
+			    frame = Frame} = State}) ->
+
+    observer_trace_wx:start(Node,
+			    new,
+			    Options,
+			    Frame,
+			    self()),
+    {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
+
 
 handle_event(#wx{event=#wxSize{size={W,_}}}, {Config, Info, #pro_wx_state{grid=Grid} = State}) ->
     wx:batch(fun() ->
