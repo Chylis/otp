@@ -118,8 +118,8 @@ handle_event(#wx{id=Id}, State = #state{node=Node, grid=Grid, opt=Opt0})
 	      ?ID_UNREADABLE -> Opt0#opt{unread_hidden= not Opt0#opt.unread_hidden};
 	      ?ID_SYSTEM_TABLES -> Opt0#opt{sys_hidden= not Opt0#opt.sys_hidden}
 	  end,
-    Tables = ?TC(get_tables(Node, Opt)),
-    Tabs = ?TC(update_grid(Grid, Opt, Tables)),
+    Tables = get_tables(Node, Opt),
+    Tabs = update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
     {noreply, State#state{opt=Opt, tabs=Tabs}};
 
