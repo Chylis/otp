@@ -34,7 +34,7 @@
 		on_spawn, on_link, all_spawn, all_link}).
 
 -record(match_spec, {alias,
-		     term_ms,
+		     term_ms = [],
 		     str_ms = [],
 		     fun2ms}).
 
@@ -714,7 +714,7 @@ handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
     wxStdDialogButtonSizer:realize(DialogBtnSz),
     wxSizer:add(MatchSz, DialogBtnSz),
     
-    wxDialog:show(Dialog, [{show, true}]),
+    wxDialog:show(Dialog),
     {noreply, State#traceopts_state{matchspec_popup_dialog = Dialog,
 				    matchspec_popup_listbox = ListBox,
 				    matchspec_popup_styled_txtctrl = StyledTxtCtrl,

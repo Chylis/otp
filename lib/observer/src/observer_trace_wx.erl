@@ -21,20 +21,14 @@
 -define(VIEW_MODULE, 8).
 -define(FIRST_MODULE, 9).
 
-
-%% -define(PREDEFINED_MS, [
-%% 			#match_spec{ms = "[{'_', [], [{return_trace}]}]"},
-%% 			#match_spec{ms = "[{'_', [], [{exception_trace}]}]"},
-%% 			#match_spec{ms = "[{'_', [], [{message, {caller}}]}]"},
-%% 			#match_spec{ms = "[{'_', [], [{message, {process_dump}}]}]"}
-%% 		       ]).
-
 -record(match_spec, {alias,
-		     term_ms,
+		     term_ms = [],
 		     str_ms = [],
 		     fun2ms}).
 
-
+-record(traced_func, {func_name, %atom
+		      arity, %integer
+		      match_spec = #match_spec{}}). % #match_spec
 -record(state, {
 	  parent,
 	  frame,
@@ -188,10 +182,11 @@ handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
     {stop, shutdown, State};
 
 handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}}, 
-	     #state{trace_options = TraceOpts, 
+	     #state{node = Node,
 		    traced_procs = TracedProcs,
-		    node = Node, text_ctrl = TextCtrl, 
 		    traced_funcs = TracedDict, 
+		    trace_options = TraceOpts, 
+		    text_ctrl = TextCtrl, 
 		    toggle_button = ToggleBtn} = State) ->
 
     start_trace(Node, TracedProcs, TracedDict, TraceOpts),
@@ -360,14 +355,16 @@ print(Num, X, Buff) ->
     print(Num-1, X, [", ",Str|Buff]).
 
 trace_functions(TracedDict) ->
-    Trace = fun(KeyAtom, ValueList, acc_in) ->
+    Trace = fun(KeyAtom, RecordList, acc_in) ->
 		    
-		    lists:foreach(fun({Function, Arity}) ->
-					  Res = dbg:tpl({KeyAtom, Function, Arity}, []),
-					      io:format("Module: ~p~n, Function: ~p,  Arity: ~p~n~p~n",
-							[KeyAtom, Function, Arity, Res])
+		    lists:foreach(fun(#traced_func{func_name = Function,
+						   arity = Arity,
+						   match_spec = #match_spec{term_ms = MS}}) ->
+					  Res = dbg:tpl({KeyAtom, Function, Arity}, MS),
+					  io:format("Module: ~p~nFunction: ~p Arity: ~p~nMS: ~p~nResult: ~p~n",
+						    [KeyAtom, Function, Arity, MS, Res])
 				  end,
-				  ValueList),
+				  RecordList),
 		    acc_in
 	    end,
     dict:fold(Trace, acc_in, TracedDict).
