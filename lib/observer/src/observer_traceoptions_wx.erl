@@ -563,7 +563,13 @@ check_correct_MS(String) ->
     
     try erl_parse:parse_term(Tokens) of
 	{ok, Term} ->
-	    {true, #match_spec{str_ms = String, term_ms = Term}};
+	    case check_correct_ms_format(Term) of
+		true ->
+		    {true, Term};
+		false ->
+		    false
+	    end;
+	
 	_ ->
 	    false
     catch
@@ -571,6 +577,22 @@ check_correct_MS(String) ->
 	    false
 		
     end.
+
+
+check_correct_ms_format([H|T] = Term) when length(Term) >= 1,
+					is_tuple(H), size(H) =:= 3->
+    N = length(T),
+    check_correct_ms_format(T, N);
+check_correct_ms_format(_Other) ->
+    false.
+
+check_correct_ms_format([], 0) ->
+    true;
+check_correct_ms_format([H|T], N) when is_tuple(H), size(H) =:= 3 ->
+    check_correct_ms_format(T, N-1);
+check_correct_ms_format(_Other, _) ->
+    false.
+    
 
 
     
@@ -725,11 +747,11 @@ handle_event(#wx{id = ?ADD_MS_BTN,
 			      match_specs = MatchSpecs} = State) ->
     StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
-		      {true, MSRecord} ->
+		      {true, TermMS} ->
 			  wxControlWithItems:append(ListBox, StrMS),
-			  lists:reverse([MSRecord | MatchSpecs]);
+			  lists:reverse([#match_spec{str_ms = StrMS, term_ms = TermMS} | MatchSpecs]);
 		      false ->
-			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification!"),
+			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification"),
 			  wxDialog:showModal(MsgDialog),
 			  MatchSpecs
 		  end,
@@ -746,11 +768,11 @@ handle_event(#wx{id = ?ADD_MS_ALIAS_BTN,
 		      ?wxID_OK ->
 			  StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
 			  case check_correct_MS(StrMS) of
-			      {true, MSRecord} ->
+			      {true, TermMS} ->
 				  Alias = wxTextEntryDialog:getValue(Dialog),
-				  MSRecord2 = MSRecord#match_spec{alias = Alias},
 				  wxControlWithItems:append(ListBox, Alias),
-				  lists:reverse([MSRecord2 | MatchSpecs]);
+				  lists:reverse([#match_spec{alias = Alias, str_ms = StrMS, 
+							     term_ms = TermMS} | MatchSpecs]);
 			      false ->
 				  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification!"),
 				  wxDialog:showModal(MsgDialog),
