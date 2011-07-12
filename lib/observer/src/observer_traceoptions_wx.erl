@@ -14,7 +14,16 @@
 	  parent,
 	  frame,
 	  tree,
-	  module_infobox_open = false,
+	  boxes,
+	  functionpage_listbox,
+	  matchpage_styled_txtctrl,
+	  matchpage_listbox,
+	  popup_open = false,
+	  module_popup_dialog,
+	  module_popup_checklistbox,
+	  matchspec_popup_dialog,
+	  matchspec_popup_listbox,
+	  matchspec_popup_styled_txtctrl,
 	  match_specs, % [ #match_spec ]
 	  checked_funcs = [],
 	  traced_funcs,  % Key =:= Module::atom, Value =:= [ #traced_func ]
@@ -33,14 +42,21 @@
 		      arity, %integer
 		      match_spec = #match_spec{}}). % #match_spec
 
+-define(TRACEOPTS_FRAME, 9).
 
+-define(MATCHPAGE_FUN2MS, 13).
+-define(MATCHPAGE_ADDMS, 14).
+-define(MATCHPAGE_ADDMS_ALIAS, 15).
+-define(MATCHPAGE_LISTBOX, 17).
 
--define(SELECT, 10).
--define(SELECT_ALL, 11).
--define(FUN2MS, 12).
--define(ADD_MS_BTN, 13).
--define(ADD_MS_ALIAS_BTN, 14).
--define(FRAME_TRACEOPTS, 15).
+-define(MODULEPOPUP_SELECT, 20).
+-define(MODULEPOPUP_SELALL, 21).
+-define(MODULEPOPUP_CHECKLISTBOX, 22).
+-define(MODULEPOPUP_TXTCTRL, 23).
+-define(MODULEPOPUP_DIALOG, 24).
+
+-define(FUNCTIONPAGE_LISTBOX, 25).
+-define(FUNCTIONPAGE_TXTCTRL, 26).
 
 
 start(ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
@@ -48,12 +64,15 @@ start(ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 			      TracedFuncs, MatchSpecs], []).
 
 init([ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs]) ->
-    {Frame, Tree} = setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs),
+    {Frame, Tree, Boxes, ModuleListBox, MatchTxtCtrl, MatchListBox} = setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs),
     {Frame, #traceopts_state{
        parent = ParentPid,
        frame = Frame,
        tree = Tree,
-       module_infobox_open = false,
+       functionpage_listbox = ModuleListBox,
+       matchpage_styled_txtctrl = MatchTxtCtrl,
+       matchpage_listbox = MatchListBox,
+       boxes = Boxes,
        match_specs = MatchSpecs,
        traced_funcs = TracedFuncs,
        trace_options = TraceOpts}}.
@@ -62,14 +81,14 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Setup main window
     
-    Frame = wxFrame:new(ParentFrame, ?FRAME_TRACEOPTS, "Trace options",
+    Frame = wxFrame:new(ParentFrame, ?TRACEOPTS_FRAME, "Trace options",
 			[{size, {400, 500}}]),
     Panel = wxPanel:new(Frame, []),
     MainSz = wxBoxSizer:new(?wxVERTICAL),
     Notebook = wxNotebook:new(Panel, ?wxID_ANY),
     Modules = get_modules(Node),
     
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Setup option page
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Setup tracing page
     
     OptPanel = wxPanel:new(Notebook),
     OptMainSz = wxBoxSizer:new(?wxVERTICAL),
@@ -115,7 +134,7 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
     wxWindow:setSizer(OptPanel, OptMainSz),
     wxNotebook:addPage(Notebook, OptPanel, "Tracing"),
     
-%%%%%%%%%%%%%%%%%%%%%%%% Setup trace function page
+%%%%%%%%%%%%%%%%%%%%%%%% Setup functions page
 
     FuncPanel = wxPanel:new(Notebook),
     FuncMainSz = wxBoxSizer:new(?wxVERTICAL),
@@ -123,16 +142,15 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
     TreeSz = wxStaticBoxSizer:new(?wxVERTICAL, FuncPanel, [{label, "Selected functions"}]),
     
     AllModules = atomlist_to_stringlist(Modules),
-    ModuleTxtCtrl = wxTextCtrl:new(FuncPanel, ?wxID_ANY),
-    ModuleListBox = wxListBox:new(FuncPanel, ?wxID_ANY, [{choices, AllModules}, {style, ?wxLB_SINGLE}]),
+    ModuleTxtCtrl = wxTextCtrl:new(FuncPanel, ?FUNCTIONPAGE_TXTCTRL),
+    ModuleListBox = wxListBox:new(FuncPanel, ?FUNCTIONPAGE_LISTBOX, [{choices, AllModules}, {style, ?wxLB_SINGLE}]),
     TreeCtrl = wxTreeCtrl:new(FuncPanel),
     wxTreeCtrl:addRoot(TreeCtrl, atom_to_list(Node)),
     update_tree(TreeCtrl, TracedFuncs), 
     
     wxTextCtrl:connect(ModuleTxtCtrl, command_text_updated, 
-		       [{userData, {trace_funcs, AllModules, ModuleListBox}}]),
-    wxListBox:connect(ModuleListBox, command_listbox_doubleclicked, 
-		      [{userData, trace_funcs}]),
+		       [{userData, AllModules}]),
+    wxListBox:connect(ModuleListBox, command_listbox_doubleclicked), 
     wxTreeCtrl:connect(TreeCtrl, command_tree_item_activated),
 
     wxSizer:add(ModuleSz, ModuleTxtCtrl, [{flag, ?wxEXPAND}]),
@@ -146,7 +164,7 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
     
 %%%%%%%%%%%%%%%%%%% Setup match specification page
     
-    {MatchPanel, _, _} = create_matchspec_page(Notebook, MatchSpecs),
+    {MatchPanel, _, MatchTxtCtrl, MatchListBox} = create_matchspec_page(Notebook, MatchSpecs, matchpage),
     wxNotebook:addPage(Notebook, MatchPanel, "Match Specs"),
 
 
@@ -175,11 +193,18 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 				      first_link = LinkFirstRadio},
 		   all_link = LinkAllRadio},
 
-    wxButton:connect(OKBtn, command_button_clicked, [{userData, {trace_options, Boxes}}]),
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, trace_options}]),
     wxButton:connect(CancelBtn, command_button_clicked, [{userData, trace_options}]),
-    wxFrame:connect(Frame, close_window, [{userData, trace_options}]),
+    wxFrame:connect(Frame, close_window, []),
     wxFrame:show(Frame),
-    {Frame, TreeCtrl}.
+    {Frame, TreeCtrl, Boxes, ModuleListBox, MatchTxtCtrl, MatchListBox}.
+
+
+filter_listbox_data(Input, Data, ListBox) ->
+    FilteredData = [X || X <- Data, re:run(X, Input) =/= nomatch],
+    wxListBox:clear(ListBox),
+    wxListBox:appendStrings(ListBox, FilteredData),
+    FilteredData.
 
 get_modules(Node) ->
     lists:sort([Module || {Module, _} <- rpc:call(Node, code, all_loaded, [])]).
@@ -289,9 +314,6 @@ check_box(ChkBox, Bool) ->
 	    ignore
     end.
 
-
-
-
 parse_record_function_names(RecordList) ->
     StrList = [atom_to_list(FName) ++ integer_to_list(Arity)
 	       || #traced_func{func_name = FName, arity = Arity} <- RecordList],
@@ -351,8 +373,6 @@ show_ms_in_savedlistbox(MatchSpecList) ->
     [MsOrAlias(X) || X <- MatchSpecList].
 
 
-
-
 find_and_format_ms(Ms, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun} | T ]) ->
     case (Ms =:= Spec) or (Ms =:= Alias) of
 	true ->
@@ -367,7 +387,7 @@ find_and_format_ms(Ms, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun}
     end.
 
 find_ms([], _) ->
-    [];
+    #match_spec{};
 find_ms(Str, [ #match_spec{str_ms = Spec, alias = Alias} = MS | T ]) ->
     case (Str =:= Spec) or (Str =:= Alias) of
 	true ->
@@ -380,24 +400,18 @@ apply_matchspec(MatchSpec, TracedDict, root) ->
     UpdateMS = fun(_Key, RecordList) ->
 		       [X#traced_func{match_spec = MatchSpec} || X <- RecordList]
 	       end,
-    dict:map(UpdateMS, TracedDict);
+    {ok, dict:map(UpdateMS, TracedDict)};
 apply_matchspec(MatchSpec, TracedDict, {module, Module}) ->
     RecordList = dict:fetch(Module, TracedDict),
     RecordList2 = [X#traced_func{match_spec = MatchSpec} || X <- RecordList],
-    dict:store(Module, RecordList2, TracedDict);
-apply_matchspec(MatchSpec, TracedDict, {function, Module, Function, Arity}) ->
+    {ok, dict:store(Module, RecordList2, TracedDict)};
+apply_matchspec(MatchSpec, TracedDict, {function, Module, TracedFuncRec}) -> %%Module, Function, Arity}) ->
     RecordList = dict:fetch(Module, TracedDict),
-    [OldFunc] = [X || #traced_func{func_name = Name,
-				   arity = A} = X <- RecordList,
-		      Name =:= Function, A =:= Arity],
-    NewFunc = OldFunc#traced_func{match_spec = MatchSpec},
+    NewFunc = TracedFuncRec#traced_func{match_spec = MatchSpec},
+    RecordList2 = [NewFunc | [X || X <- RecordList, X =/= TracedFuncRec]],
+    {NewFunc, dict:store(Module, RecordList2, TracedDict)}.
 
-    RecordList2 = [NewFunc | [X || #traced_func{func_name = Name,
-						arity = A} = X <- RecordList, 
-				   (Name =/= Function) or (A =/= Arity)]],
-    dict:store(Module, RecordList2, TracedDict).
-
-create_matchspec_page(Parent, MatchSpecs) ->
+create_matchspec_page(Parent, MatchSpecs, UserData) ->
     Panel = wxPanel:new(Parent),
     MainSz = wxBoxSizer:new(?wxVERTICAL),
     TxtSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, "Match specification:"}]),
@@ -407,27 +421,27 @@ create_matchspec_page(Parent, MatchSpecs) ->
     TxtCtrl = create_styled_txtctrl(Panel),
     wxSizer:add(TxtSz, TxtCtrl, [{flag, ?wxEXPAND}, {proportion, 1}]),
 
-    AddMsBtn = wxButton:new(Panel, ?ADD_MS_BTN, [{label, "Add"}]),
-    AddMsAliasBtn = wxButton:new(Panel, ?ADD_MS_ALIAS_BTN, [{label, "Add with alias"}]),
-    Fun2MSBtn = wxButton:new(Panel, ?FUN2MS, [{label, "Fun2ms"}]),
+    AddMsBtn = wxButton:new(Panel, ?MATCHPAGE_ADDMS, [{label, "Add"}]),
+    AddMsAliasBtn = wxButton:new(Panel, ?MATCHPAGE_ADDMS_ALIAS, [{label, "Add with alias"}]),
+    Fun2MSBtn = wxButton:new(Panel, ?MATCHPAGE_FUN2MS, [{label, "Fun2ms"}]),
     wxSizer:add(BtnSz, AddMsBtn),
     wxSizer:add(BtnSz, AddMsAliasBtn),
     wxSizer:add(BtnSz, Fun2MSBtn),
 
     Choices = show_ms_in_savedlistbox(MatchSpecs),
-    SavedMSListBox = wxListBox:new(Panel, ?wxID_ANY, [{choices, Choices}]),
+    SavedMSListBox = wxListBox:new(Panel, ?MATCHPAGE_LISTBOX, [{choices, Choices}]),
     wxSizer:add(SavedSz, SavedMSListBox, [{flag, ?wxEXPAND}, {proportion, 1}]),
 
-    wxButton:connect(AddMsBtn, command_button_clicked, [{userData, {TxtCtrl, SavedMSListBox}}]),
-    wxButton:connect(AddMsAliasBtn, command_button_clicked, [{userData, {Panel, TxtCtrl, SavedMSListBox}}]),
-    wxButton:connect(Fun2MSBtn, command_button_clicked),
-    wxListBox:connect(SavedMSListBox, command_listbox_selected, [{userData, {trace_matchspec, TxtCtrl}}]),
+    wxButton:connect(AddMsBtn, command_button_clicked, [{userData, UserData}]),
+    wxButton:connect(AddMsAliasBtn, command_button_clicked, [{userData, UserData}] ),
+    wxButton:connect(Fun2MSBtn, command_button_clicked, [{userData, UserData}] ),
+    wxListBox:connect(SavedMSListBox, command_listbox_selected, [{userData, UserData}] ),
     wxSizer:add(MainSz, TxtSz, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(MainSz, BtnSz),
     wxSizer:add(MainSz, SavedSz, [{flag, ?wxEXPAND}, {proportion, 1}]),
 
     wxWindow:setSizer(Panel, MainSz),
-    {Panel, MainSz, SavedMSListBox}.
+    {Panel, MainSz, TxtCtrl, SavedMSListBox}.
 
 
 
@@ -438,9 +452,10 @@ update_tree(Tree, Dict) ->
     FillTree = fun(KeyAtom, RecordList, acc_in) ->
 		       ParsedList = parse_record_function_names(RecordList),
 		       Module = wxTreeCtrl:appendItem(Tree, RootId, atom_to_list(KeyAtom)),
-		       lists:foldl(fun(#traced_func{func_name = FName, arity = Arity}, N) ->
+		       lists:foldl(fun(TracedFuncRecord, N) ->
 					   FNameStr = lists:nth(N, ParsedList),
-					   wxTreeCtrl:appendItem(Tree, Module, FNameStr, [{data, {KeyAtom, FName, Arity}}]),
+					   wxTreeCtrl:appendItem(Tree, Module, FNameStr,
+								 [{data, TracedFuncRecord}]),
 					   N+1
 				   end,
 				   1, RecordList),
@@ -454,7 +469,7 @@ update_tree(Tree, Dict) ->
 
 
 
-create_module_infobox(Parent, ModuleName, TracedDict) ->
+create_module_popup(Parent, ModuleName, TracedDict) ->
     Module = list_to_atom(ModuleName),
     Value = dict:find(Module, TracedDict),
     TracedModRecs = 
@@ -468,17 +483,17 @@ create_module_infobox(Parent, ModuleName, TracedDict) ->
     Choices = lists:sort([{Name, Arity} || {Name, Arity} <- Functions, not(erl_internal:guard_bif(Name, Arity))]),
     ParsedChoices = parse_function_names(Choices),
 
-    Dialog = wxDialog:new(Parent, ?wxID_ANY, ModuleName),
+    Dialog = wxDialog:new(Parent, ?MODULEPOPUP_DIALOG, ModuleName),
     Panel = wxPanel:new(Dialog),
     MainSz = wxBoxSizer:new(?wxVERTICAL),
 
     SelBtnSz = wxBoxSizer:new(?wxHORIZONTAL),
-    TxtCtrl = wxTextCtrl:new(Panel, ?wxID_ANY),
-    SelBtn = wxButton:new(Panel, ?SELECT, [{label, "Select"}]),
-    DeSelBtn = wxButton:new(Panel, ?SELECT, [{label, "Deselect"}]),
-    SelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Select all"}]),
-    DeSelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Deselect all"}]),
-    CheckListBox = wxCheckListBox:new(Panel, ?wxID_ANY, [{choices, ParsedChoices}, {style, ?wxLB_EXTENDED}]),
+    TxtCtrl = wxTextCtrl:new(Panel, ?MODULEPOPUP_TXTCTRL),
+    SelBtn = wxButton:new(Panel, ?MODULEPOPUP_SELECT, [{label, "Select"}]),
+    DeSelBtn = wxButton:new(Panel, ?MODULEPOPUP_SELECT, [{label, "Deselect"}]),
+    SelAllBtn = wxButton:new(Panel, ?MODULEPOPUP_SELALL, [{label, "Select all"}]),
+    DeSelAllBtn = wxButton:new(Panel, ?MODULEPOPUP_SELALL, [{label, "Deselect all"}]),
+    CheckListBox = wxCheckListBox:new(Panel, ?MODULEPOPUP_CHECKLISTBOX, [{choices, ParsedChoices}, {style, ?wxLB_EXTENDED}]),
     Indices = find_index(TracedModRecs, Choices),
     lists:foreach(fun(X) ->  wxCheckListBox:check(CheckListBox, X) end, Indices),
     Selections = [wxControlWithItems:getString(CheckListBox, I) || I <- Indices],
@@ -500,17 +515,17 @@ create_module_infobox(Parent, ModuleName, TracedDict) ->
     wxSizer:add(MainSz, DialogBtnSz),
     wxWindow:setSizer(Panel, MainSz),
 
-    wxButton:connect(SelBtn, command_button_clicked, [{userData, {true, CheckListBox}}]),
-    wxButton:connect(DeSelBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
-    wxButton:connect(SelAllBtn, command_button_clicked, [{userData, {true, CheckListBox}}]),
-    wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, {false, CheckListBox}}]),
-    wxButton:connect(OKBtn, command_button_clicked, [{userData, {module_infobox, Dialog, Module, ParsedChoices, Choices}}]),
-    wxButton:connect(CancelBtn, command_button_clicked, [{userData, {module_infobox, Dialog}}]),
-    wxTextCtrl:connect(TxtCtrl, command_text_updated, [{userData, {module_infobox, ParsedChoices, CheckListBox}}]),
+    wxButton:connect(SelBtn, command_button_clicked, [{userData, true}]),
+    wxButton:connect(DeSelBtn, command_button_clicked, [{userData, false}]),
+    wxButton:connect(SelAllBtn, command_button_clicked, [{userData, true}]),
+    wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, false}]),
+    wxButton:connect(OKBtn, command_button_clicked, [{userData, {module_popup, Module, ParsedChoices, Choices}}]),
+    wxButton:connect(CancelBtn, command_button_clicked, [{userData, module_popup}]),
+    wxTextCtrl:connect(TxtCtrl, command_text_updated, [{userData, ParsedChoices}]),
     wxCheckListBox:connect(CheckListBox, command_checklistbox_toggled),
-    wxDialog:connect(Dialog, close_window, [{userData, {module_infobox, Dialog}}]),
+    wxDialog:connect(Dialog, close_window),
     wxDialog:show(Dialog),
-    Selections.
+    {Dialog, CheckListBox, Selections}.
 
 get_selections(Selections, FunctionList) ->
     get_selections(Selections, FunctionList, []).
@@ -550,47 +565,62 @@ atomlist_to_stringlist(Modules) ->
     [atom_to_list(X) || X <- Modules].
 
 
-
+check_correct_MS([]) ->
+    false;
 check_correct_MS(String) ->
-    Tokens = case lists:last(String) =:= $. of
-		 true ->
-    		     {ok, T, _} = erl_scan:string(String),
-		     T;
-		 false ->
-		     {ok, T, _} = erl_scan:string(String ++ "."),
-		     T
-	     end,
+    Tokens =
+	case lists:last(String) =:= $. of
+	    true ->
+		try_scan(String);
+	    false ->
+		try_scan(String ++ ".")
+	end,
+    io:format("Tokens: ~p~n", [Tokens]),
     
-    try erl_parse:parse_term(Tokens) of
+    case try_parse(Tokens) of
 	{ok, Term} ->
-	    case check_correct_ms_format(Term) of
-		true ->
-		    {true, Term};
-		false ->
-		    false
-	    end;
-	
-	_ ->
+	    check_correct_ms_format(Term);
+	error ->
 	    false
-    catch
+    end.
+    
+
+try_scan(String) ->
+    try	
+	erl_scan:string(String) of
+	{ok, T, _} ->
+	    T;
 	_ ->
-	    false
-		
+	    error
+    catch 
+	_:_ -> error
     end.
 
+try_parse(Tokens) ->
+    try
+	erl_parse:parse_term(Tokens) of
+	{ok, Term} ->
+	    {ok, Term};
+	_ ->
+	    error
+    catch
+	_:_ ->
+	    error
+    end.
+	
 
 check_correct_ms_format([H|T] = Term) when length(Term) >= 1,
-					is_tuple(H), size(H) =:= 3->
+					   is_tuple(H), size(H) =:= 3->
     N = length(T),
-    check_correct_ms_format(T, N);
+    check_correct_ms_format(T, N, Term);
 check_correct_ms_format(_Other) ->
     false.
 
-check_correct_ms_format([], 0) ->
-    true;
-check_correct_ms_format([H|T], N) when is_tuple(H), size(H) =:= 3 ->
-    check_correct_ms_format(T, N-1);
-check_correct_ms_format(_Other, _) ->
+check_correct_ms_format([], 0, Term) ->
+    {true, Term};
+check_correct_ms_format([H|T], N, Term) when is_tuple(H), size(H) =:= 3 ->
+    check_correct_ms_format(T, N-1, Term);
+check_correct_ms_format(_Other, _, _) ->
     false.
     
 
@@ -604,8 +634,9 @@ check_correct_ms_format(_Other, _) ->
 
 handle_event(#wx{id = ?wxID_OK,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {trace_options, Boxes}}, 
-	     #traceopts_state{trace_options = TraceOpts, 
+		userData = trace_options}, 
+	     #traceopts_state{boxes = Boxes,
+			      trace_options = TraceOpts, 
 			      match_specs = MatchSpecs,
 			      traced_funcs = TracedFuncs,
 			      parent = Parent} = State) ->
@@ -625,126 +656,113 @@ handle_event(#wx{id = ?wxID_CANCEL,
     Parent ! traceopts_closed,
     {stop, shutdown, State};
 
-handle_event(#wx{event = #wxClose{type = close_window},
-		userData = trace_options},
-	     #traceopts_state{parent = Parent} = State) ->
+handle_event(#wx{id = ?TRACEOPTS_FRAME,
+		 event = #wxClose{type = close_window}},
+		 #traceopts_state{parent = Parent} = State) ->
     Parent ! traceopts_closed,
     {stop, shutdown, State};
 
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Trace Options
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Tracing
 
-handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = Boxes},
+handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData = Boxgroup},
 	     State) ->
-    enable(Boxes),
+    enable(Boxgroup),
     {noreply, State};
 
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Function options
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Functions
 
-handle_event(#wx{obj = ListBox,
-		 event = #wxCommand{type = command_listbox_doubleclicked},
-		 userData = trace_funcs},
+handle_event(#wx{id = ?FUNCTIONPAGE_LISTBOX,
+		 obj = ListBox,
+		 event = #wxCommand{type = command_listbox_doubleclicked}},
 	     #traceopts_state{frame = Frame, 
 			      traced_funcs = TracedDict,
-			      module_infobox_open = false} = State) ->
+			      popup_open = false} = State) ->
     ChosenModule = wxControlWithItems:getStringSelection(ListBox),
-    CheckedFuncs = create_module_infobox(Frame, ChosenModule, TracedDict),
-    {noreply, State#traceopts_state{module_infobox_open = true,
+    {Dialog, CheckListBox, CheckedFuncs} = create_module_popup(Frame, ChosenModule, TracedDict),
+    {noreply, State#traceopts_state{popup_open = true,
+				    module_popup_dialog = Dialog,
+				    module_popup_checklistbox = CheckListBox,
 				    checked_funcs = CheckedFuncs}};
 
-handle_event(#wx{obj = TxtCtrl,
+handle_event(#wx{id = ?FUNCTIONPAGE_TXTCTRL,
+		 obj = TxtCtrl,
 		 event = #wxCommand{type = command_text_updated},
-		 userData = {From, Data, ListBox}},
-	     #traceopts_state{checked_funcs = CheckedFuncs} = State) -> 
-    
+		 userData = Data},
+	     #traceopts_state{functionpage_listbox = ListBox} = State) ->
+			      %% checked_funcs = CheckedFuncs} = State
     Input = wxTextCtrl:getValue(TxtCtrl),
-    FilteredData = [X || X <- Data, re:run(X, Input) =/= nomatch],
-    wxListBox:clear(ListBox),
-    wxListBox:appendStrings(ListBox, FilteredData),
-    
-    case From of
-    	module_infobox ->
-    	    lists:foreach(fun(Index) -> wxCheckListBox:check(ListBox, Index, [{check, true}]) end,
-    			  [wxControlWithItems:findString(ListBox, X) || X <- CheckedFuncs, lists:member(X, FilteredData)]);
-	trace_funcs ->
-	    ignore
-    end,
+    filter_listbox_data(Input, Data, ListBox),
     {noreply, State};
 
-handle_event(#wx{obj = Tree, event = #wxTree{type = command_tree_item_activated,
-					     item = Item}},
+handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
+				 item = Item}},
 	     #traceopts_state{frame = Frame, 
-			      traced_funcs = TracedDict,
 			      match_specs = MatchSpecs,
-			      module_infobox_open = false} = State) ->
+			      popup_open = false} = State) ->
     
     Dialog = wxDialog:new(Frame, ?wxID_ANY, "Match specification"),
-    {MatchPanel, MatchSz, ListBox} = create_matchspec_page(Dialog, MatchSpecs),
-    ApplyBtn = wxButton:new(MatchPanel, ?wxID_OK, [{label, "Apply"}]),
+    {MatchPanel, MatchSz, StyledTxtCtrl, ListBox} = create_matchspec_page(Dialog, MatchSpecs, matchpopup),
+    ApplyBtn = wxButton:new(MatchPanel, ?wxID_APPLY),
     CancelBtn = wxButton:new(MatchPanel, ?wxID_CANCEL, []),
+    wxButton:connect(ApplyBtn, command_button_clicked, [{userData, Item}]),
+    wxButton:connect(CancelBtn, command_button_clicked, [{userData, matchspec_popup}]),
     DialogBtnSz = wxStdDialogButtonSizer:new(),
     wxStdDialogButtonSizer:addButton(DialogBtnSz, ApplyBtn),
     wxStdDialogButtonSizer:addButton(DialogBtnSz, CancelBtn),
     wxStdDialogButtonSizer:realize(DialogBtnSz),
     wxSizer:add(MatchSz, DialogBtnSz),
+    
+    wxDialog:show(Dialog, [{show, true}]),
+    {noreply, State#traceopts_state{matchspec_popup_dialog = Dialog,
+				    matchspec_popup_listbox = ListBox,
+				    matchspec_popup_styled_txtctrl = StyledTxtCtrl,
+				    popup_open = true}};
 
-    TracedDict2 = case wxDialog:showModal(Dialog) of
-		      ?wxID_OK ->
-			  IntSelection = wxListBox:getSelection(ListBox),
-			  StrSelection = wxControlWithItems:getString(ListBox, IntSelection),
-			  MS = find_ms(StrSelection, MatchSpecs),
-			  RootId = wxTreeCtrl:getRootItem(Tree),
-			  ItemParent = wxTreeCtrl:getItemParent(Tree, Item),
-			  
-			  if (Item =:= RootId) ->
-				  apply_matchspec(MS, TracedDict, root);
-			     (ItemParent =:= RootId) ->
-				  Module = list_to_atom(wxTreeCtrl:getItemText(Tree, Item)),
-				  apply_matchspec(MS, TracedDict, {module, Module});
-			     true -> 	
-				  {Module, Function, Arity} = wxTreeCtrl:getItemData(Tree, Item),
-				  apply_matchspec(MS, 
-						  TracedDict, 
-						  {function,
-						   Module,
-						   Function, 
-						   Arity})
-			  end;
-		      ?wxID_CANCEL ->
-			  TracedDict
-		  end,
-    {noreply, State#traceopts_state{traced_funcs = TracedDict2}};
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Match specs
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Match specifications
-
-handle_event(#wx{obj = ListBox,
+handle_event(#wx{id = ?MATCHPAGE_LISTBOX,
+		 obj = ListBox,
 		 event = #wxCommand{type = command_listbox_selected},
-		 userData = {trace_matchspec, StyledTxtCtrl}},
+		 userData = From},
 	     #traceopts_state{match_specs = MatchSpecs} = State) ->
+    io:format("Selected ~n"),
+    
+    StyledTxtCtrl = case From of
+    			matchpage ->
+    			    State#traceopts_state.matchpage_styled_txtctrl;
+    			matchpopup ->
+    			    State#traceopts_state.matchspec_popup_styled_txtctrl
+    		    end,
     SavedTxt = wxControlWithItems:getStringSelection(ListBox),
     MsOrFun = find_and_format_ms(SavedTxt, MatchSpecs),
     wxStyledTextCtrl:setText(StyledTxtCtrl, MsOrFun),
     {noreply, State};
 
-handle_event(#wx{id = ?FUN2MS,
-		 event = #wxCommand{type = command_button_clicked}},
+handle_event(#wx{id = ?MATCHPAGE_FUN2MS,
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = From},
 	     #traceopts_state{frame = Frame} = State) ->
-    %% FunTxt = wxStyledTextCtrl:getText(Fun2MSTxtCtrl),
     io:format("Not implemented... yet!~n"),
-    %% {ok, Tokens,_} = erl_scan:string(FunTxt),
-    %% io:format("Tokens ~p~n", [Tokens]),
-    %% {ok, Term} = erl_parse:parse_term(Tokens),
-    %% MatchSpec = dbg:fun2ms(Term),
-    %% wxStyledTextCtrl:appendText(MSTxtCtrl, MatchSpec),
     {noreply, State};
 
-handle_event(#wx{id = ?ADD_MS_BTN,
+handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {StyledTxtCtrl, ListBox}},
-	     #traceopts_state{frame = Frame,
-			      match_specs = MatchSpecs} = State) ->
+		 userData = From},
+	     #traceopts_state{match_specs = MatchSpecs} = State) ->
+    
+    {StyledTxtCtrl, ListBox, Frame} = case From of
+					  matchpage ->
+					      {State#traceopts_state.matchpage_styled_txtctrl,
+					       State#traceopts_state.matchpage_listbox,
+					       State#traceopts_state.frame};
+					  matchpopup ->
+					      {State#traceopts_state.matchspec_popup_styled_txtctrl,
+					       State#traceopts_state.matchspec_popup_listbox,
+					State#traceopts_state.matchspec_popup_dialog}
+				      end,
+    
     StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
 		      {true, TermMS} ->
@@ -758,42 +776,107 @@ handle_event(#wx{id = ?ADD_MS_BTN,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
 
 
-handle_event(#wx{id = ?ADD_MS_ALIAS_BTN,
+handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {Panel, StyledTxtCtrl, ListBox}},
-	     #traceopts_state{frame = Frame, 
-			      match_specs = MatchSpecs} = State) ->
-    Dialog = wxTextEntryDialog:new(Panel, "Enter ms alias: "),
-    MatchSpecs2 = case wxDialog:showModal(Dialog) of
-		      ?wxID_OK ->
-			  StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
-			  case check_correct_MS(StrMS) of
-			      {true, TermMS} ->
-				  Alias = wxTextEntryDialog:getValue(Dialog),
+		 userData = From},
+	     #traceopts_state{match_specs = MatchSpecs} = State) ->
+        
+    {StyledTxtCtrl, ListBox, Frame} = case From of
+					  matchpage ->
+					      {State#traceopts_state.matchpage_styled_txtctrl,
+					       State#traceopts_state.matchpage_listbox,
+					       State#traceopts_state.frame};
+					  matchpopup ->
+					      {State#traceopts_state.matchspec_popup_styled_txtctrl,
+					       State#traceopts_state.matchspec_popup_listbox,
+					       State#traceopts_state.matchspec_popup_dialog}
+				      end,
+    
+    StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
+    MatchSpecs2 = case check_correct_MS(StrMS) of
+		      {true, TermMS} ->
+			  Dialog = wxTextEntryDialog:new(Frame, "Enter ms alias: "),
+			  Alias = case wxDialog:showModal(Dialog) of
+				      ?wxID_OK ->
+					  wxTextEntryDialog:getValue(Dialog);
+				      ?wxID_CANCEL ->
+					  ""
+				  end,
+			  case Alias of
+			      "" ->
+				  MatchSpecs;
+			      _ ->
 				  wxControlWithItems:append(ListBox, Alias),
 				  lists:reverse([#match_spec{alias = Alias, str_ms = StrMS, 
-							     term_ms = TermMS} | MatchSpecs]);
-			      false ->
-				  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification!"),
-				  wxDialog:showModal(MsgDialog),
-				  MatchSpecs
+							     term_ms = TermMS} | MatchSpecs])
 			  end;
-		      ?wxID_CANCEL ->
+		      false ->
+			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification!"),
+			  wxDialog:showModal(MsgDialog),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
 
+handle_event(#wx{id = ?wxID_APPLY,
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = Item},
+	     #traceopts_state{matchspec_popup_dialog = Dialog,
+			      matchspec_popup_listbox = ListBox,
+			      tree = Tree,
+			      match_specs = MatchSpecs,
+			      traced_funcs = TracedDict} = State) ->
+
+    IntSelection = wxListBox:getSelection(ListBox),
+    StrSelection = wxControlWithItems:getString(ListBox, IntSelection),
+    MS = find_ms(StrSelection, MatchSpecs),
+    RootId = wxTreeCtrl:getRootItem(Tree),
+    ItemParent = wxTreeCtrl:getItemParent(Tree, Item),
+    
+    TracedDict2 = 
+	if (Item =:= RootId) ->
+		{ok, NewDict} = apply_matchspec(MS, TracedDict, root),
+		NewDict;
+	   (ItemParent =:= RootId) ->
+		Module = list_to_atom(wxTreeCtrl:getItemText(Tree, Item)),
+		{ok, NewDict} = apply_matchspec(MS, TracedDict, {module, Module}),
+		NewDict;
+	   true -> 
+		TracedFuncRec = wxTreeCtrl:getItemData(Tree, Item),
+		Module = list_to_atom(wxTreeCtrl:getItemText(Tree, ItemParent)),
+		{NewTracedFuncRecord, NewDict} = 
+		    apply_matchspec(MS, 
+				    TracedDict, 
+				    {function,
+				     Module,
+				     TracedFuncRec}),
+		wxTreeCtrl:setItemData(Tree, Item, NewTracedFuncRecord),
+		NewDict
+	end,
+
+    wxDialog:destroy(Dialog),
+    {noreply, State#traceopts_state{traced_funcs = TracedDict2,
+				    popup_open = false}};
+
+handle_event(#wx{id = ?wxID_CANCEL,
+		 event = #wxCommand{type = command_button_clicked},
+		userData = matchspec_popup},
+	     #traceopts_state{matchspec_popup_dialog = Dialog} = State) ->
+    wxDialog:destroy(Dialog),
+    {noreply, State#traceopts_state{popup_open = false}};
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-						%Module info box
+						%Module Popup
 
-handle_event(#wx{id = ?wxID_OK, %Module_infobox OK
+handle_event(#wx{id = ?wxID_OK,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {module_infobox, Dialog, Module, 
+		 userData = {module_popup, Module, 
 			     ParsedChoices, Choices}},
-	     #traceopts_state{traced_funcs = TracedDict,
-			      tree = Tree,
-			      checked_funcs = CheckedFuncs} = State) ->
+	     #traceopts_state{
+		  module_popup_dialog = Dialog,
+		  traced_funcs = TracedDict,
+		  tree = Tree,
+		  checked_funcs = CheckedFuncs} = State) ->
     
     Indices = [I+1 || I <- find_index(CheckedFuncs, ParsedChoices)],
     Selections = get_selections(Indices, Choices),
@@ -808,22 +891,24 @@ handle_event(#wx{id = ?wxID_OK, %Module_infobox OK
 		  end,
     
     update_tree(Tree, TracedDict2),
-    wxDialog:show(Dialog, [{show, false}]),
+    wxDialog:destroy(Dialog),
     {noreply, State#traceopts_state{traced_funcs = TracedDict2,
 			  checked_funcs = [],
-			  module_infobox_open = false}};
+			  popup_open = false}};
 
-handle_event(#wx{id = ?wxID_CANCEL, %Module_infobox cancel
+handle_event(#wx{id = ?wxID_CANCEL,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {module_infobox, Dialog}},
-	     State) ->
-    wxDialog:show(Dialog, [{show, false}]),
-    {noreply, State#traceopts_state{module_infobox_open = false, checked_funcs = []}};
+		userData = module_popup},
+	     #traceopts_state{module_popup_dialog = Dialog} = State) ->
+    wxDialog:destroy(Dialog),
+    {noreply, State#traceopts_state{popup_open = false, 
+				    checked_funcs = []}};
 
-handle_event(#wx{id = ?SELECT, %Module_infobox select/deselect
+handle_event(#wx{id = ?MODULEPOPUP_SELECT,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {Bool, CheckListBox}},
-	     #traceopts_state{checked_funcs = CheckedFuncs} = State) ->
+		 userData = Bool},
+	     #traceopts_state{module_popup_checklistbox = CheckListBox,
+			      checked_funcs = CheckedFuncs} = State) ->
     {_, Selections} = wxListBox:getSelections(CheckListBox),
     lists:foreach(fun(Index) -> wxCheckListBox:check(CheckListBox, Index, [{check, Bool}]) end, Selections),
     StrSelections = [wxControlWithItems:getString(CheckListBox, N) || N <- Selections],
@@ -836,10 +921,10 @@ handle_event(#wx{id = ?SELECT, %Module_infobox select/deselect
 		    end,
     {noreply, State#traceopts_state{checked_funcs = CheckedFuncs2}};
 
-handle_event(#wx{id = ?SELECT_ALL, %Module_infobox select-/deselect-all
+handle_event(#wx{id = ?MODULEPOPUP_SELALL,
 		 event = #wxCommand{type = command_button_clicked},
-		 userData = {Bool, CheckListBox}},
-	     State) ->
+		 userData = Bool},
+	     #traceopts_state{module_popup_checklistbox = CheckListBox} = State) ->
     lists:foreach(fun(Index) -> 
 			  wxCheckListBox:check(CheckListBox, Index, [{check, Bool}])
 		  end,
@@ -853,11 +938,12 @@ handle_event(#wx{id = ?SELECT_ALL, %Module_infobox select-/deselect-all
 		   end,
     {noreply, State#traceopts_state{checked_funcs = CheckedFuncs}};
 
-handle_event(#wx{obj = CheckListBox,
+handle_event(#wx{id = ?MODULEPOPUP_CHECKLISTBOX,
+		 obj = CheckListBox,
 		 event = #wxCommand{type = command_checklistbox_toggled,
 				    commandInt = Index}},
 	     #traceopts_state{checked_funcs = CheckedFuncs} = State) ->
-
+    
     UpdCheckedFuncs = case 
 			  wxCheckListBox:isChecked(CheckListBox, Index) of
 			  true ->
@@ -867,10 +953,25 @@ handle_event(#wx{obj = CheckListBox,
 		      end,
     {noreply, State#traceopts_state{checked_funcs = UpdCheckedFuncs}};
 
-handle_event(#wx{event = #wxClose{type = close_window},
-		 userData = {module_infobox, Dialog}}, State) ->
-    wxDialog:show(Dialog, [{show, false}]),
-    {noreply, State#traceopts_state{module_infobox_open = false, 
+handle_event(#wx{id = ?MODULEPOPUP_TXTCTRL,
+		 obj = TxtCtrl,
+		 event = #wxCommand{type = command_text_updated},
+		 userData = Data},
+	     #traceopts_state{module_popup_checklistbox = CListBox,
+			      checked_funcs = CheckedFuncs} = State) ->
+    Input = wxTextCtrl:getValue(TxtCtrl),
+    FilteredData = filter_listbox_data(Input, Data, CListBox),
+    lists:foreach(fun(Index) -> 
+			  wxCheckListBox:check(CListBox, Index, [{check, true}]) 
+		  end,
+		  [wxControlWithItems:findString(CListBox, X) || X <- CheckedFuncs, lists:member(X, FilteredData)]),
+    {noreply, State};
+
+handle_event(#wx{id = ?MODULEPOPUP_DIALOG,
+		 event = #wxClose{type = close_window}},
+	     #traceopts_state{module_popup_dialog = Dialog} = State) ->
+    wxDialog:destroy(Dialog),
+    {noreply, State#traceopts_state{popup_open = false, 
 				    checked_funcs = []}};
 
 handle_event(#wx{event = What}, State) ->
