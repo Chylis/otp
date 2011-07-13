@@ -1,4 +1,3 @@
-%%%-------------------------------------------------------------------
 -module(observer_traceoptions_wx).
 
 -include_lib("wx/include/wx.hrl").
@@ -632,10 +631,6 @@ update_matchspec_listbox(Str, {PopupBox, PageBox}, From) ->
 	    wxControlWithItems:append(PageBox, Str)
     end.
 
-
-
-    
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 						%Trace option window
 
@@ -834,9 +829,14 @@ handle_event(#wx{id = ?wxID_APPLY,
 			      tree = Tree,
 			      match_specs = MatchSpecs,
 			      traced_funcs = TracedDict} = State) ->
-
     IntSelection = wxListBox:getSelection(ListBox),
-    StrSelection = wxControlWithItems:getString(ListBox, IntSelection),
+    StrSelection = 
+	case IntSelection >= 0 of
+	    true ->
+		wxControlWithItems:getString(ListBox, IntSelection);
+	    false ->
+		[]
+	end,
     MS = find_ms(StrSelection, MatchSpecs),
     RootId = wxTreeCtrl:getRootItem(Tree),
     ItemParent = wxTreeCtrl:getItemParent(Tree, Item),
@@ -861,7 +861,6 @@ handle_event(#wx{id = ?wxID_APPLY,
 		wxTreeCtrl:setItemData(Tree, Item, NewTracedFuncRecord),
 		NewDict
 	end,
-
     wxDialog:destroy(Dialog),
     {noreply, State#traceopts_state{traced_funcs = TracedDict2,
 				    popup_open = false}};
