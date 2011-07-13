@@ -80,7 +80,7 @@ init([Node, TracedProcs, TraceOpts, ParentFrame, ParentPid]) ->
     {Frame, State#state{parent = ParentPid,
 			node = Node,
 			traced_procs = TracedProcs,
-			traceoptions_open = false}}.
+			traceoptions_open = true}}.
 
 
 create_window(ParentFrame, TraceOpts) ->

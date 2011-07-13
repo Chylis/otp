@@ -622,7 +622,16 @@ check_correct_ms_format([H|T], N, Term) when is_tuple(H), size(H) =:= 3 ->
     check_correct_ms_format(T, N-1, Term);
 check_correct_ms_format(_Other, _, _) ->
     false.
-    
+
+update_matchspec_listbox(Str, {PopupBox, PageBox}, From) ->
+    case From of
+	matchpopup ->
+	    wxControlWithItems:append(PageBox, Str),
+	    wxControlWithItems:append(PopupBox, Str);
+	matchpage -> 
+	    wxControlWithItems:append(PageBox, Str)
+    end.
+
 
 
     
@@ -727,8 +736,7 @@ handle_event(#wx{id = ?MATCHPAGE_LISTBOX,
 		 event = #wxCommand{type = command_listbox_selected},
 		 userData = From},
 	     #traceopts_state{match_specs = MatchSpecs} = State) ->
-    io:format("Selected ~n"),
-    
+        
     StyledTxtCtrl = case From of
     			matchpage ->
     			    State#traceopts_state.matchpage_styled_txtctrl;
@@ -750,23 +758,23 @@ handle_event(#wx{id = ?MATCHPAGE_FUN2MS,
 handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 		 event = #wxCommand{type = command_button_clicked},
 		 userData = From},
-	     #traceopts_state{match_specs = MatchSpecs} = State) ->
+	     #traceopts_state{match_specs = MatchSpecs,
+			      matchpage_listbox = PageListBox,
+			      matchspec_popup_listbox = PopupListBox} = State) ->
     
-    {StyledTxtCtrl, ListBox, Frame} = case From of
-					  matchpage ->
-					      {State#traceopts_state.matchpage_styled_txtctrl,
-					       State#traceopts_state.matchpage_listbox,
-					       State#traceopts_state.frame};
-					  matchpopup ->
-					      {State#traceopts_state.matchspec_popup_styled_txtctrl,
-					       State#traceopts_state.matchspec_popup_listbox,
-					State#traceopts_state.matchspec_popup_dialog}
-				      end,
+    {StyledTxtCtrl, Frame} = case From of
+				 matchpage ->
+				     {State#traceopts_state.matchpage_styled_txtctrl,
+				      State#traceopts_state.frame};
+				 matchpopup ->
+				     {State#traceopts_state.matchspec_popup_styled_txtctrl,
+				      State#traceopts_state.matchspec_popup_dialog}
+			     end,
     
     StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
 		      {true, TermMS} ->
-			  wxControlWithItems:append(ListBox, StrMS),
+			  update_matchspec_listbox(StrMS, {PopupListBox, PageListBox}, From),
 			  lists:reverse([#match_spec{str_ms = StrMS, term_ms = TermMS} | MatchSpecs]);
 		      false ->
 			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification"),
@@ -779,18 +787,18 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 		 event = #wxCommand{type = command_button_clicked},
 		 userData = From},
-	     #traceopts_state{match_specs = MatchSpecs} = State) ->
-        
-    {StyledTxtCtrl, ListBox, Frame} = case From of
-					  matchpage ->
-					      {State#traceopts_state.matchpage_styled_txtctrl,
-					       State#traceopts_state.matchpage_listbox,
-					       State#traceopts_state.frame};
-					  matchpopup ->
-					      {State#traceopts_state.matchspec_popup_styled_txtctrl,
-					       State#traceopts_state.matchspec_popup_listbox,
-					       State#traceopts_state.matchspec_popup_dialog}
-				      end,
+	     #traceopts_state{match_specs = MatchSpecs,
+			      matchpage_listbox = PageListBox,
+			      matchspec_popup_listbox = PopupListBox} = State) ->
+    
+    {StyledTxtCtrl, Frame} = case From of
+				 matchpage ->
+				     {State#traceopts_state.matchpage_styled_txtctrl,
+				      State#traceopts_state.frame};
+				 matchpopup ->
+				     {State#traceopts_state.matchspec_popup_styled_txtctrl,
+				      State#traceopts_state.matchspec_popup_dialog}
+			     end,
     
     StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
@@ -806,7 +814,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 			      "" ->
 				  MatchSpecs;
 			      _ ->
-				  wxControlWithItems:append(ListBox, Alias),
+				  update_matchspec_listbox(Alias, {PopupListBox, PageListBox}, From),
 				  lists:reverse([#match_spec{alias = Alias, str_ms = StrMS, 
 							     term_ms = TermMS} | MatchSpecs])
 			  end;
@@ -816,6 +824,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
+
 
 handle_event(#wx{id = ?wxID_APPLY,
 		 event = #wxCommand{type = command_button_clicked},
