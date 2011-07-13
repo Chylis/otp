@@ -43,7 +43,7 @@
 
 -define(TRACEOPTS_FRAME, 9).
 
--define(MATCHPAGE_FUN2MS, 13).
+-define(MATCHPAGE_ADDFUN, 13).
 -define(MATCHPAGE_ADDMS, 14).
 -define(MATCHPAGE_ADDMS_ALIAS, 15).
 -define(MATCHPAGE_LISTBOX, 17).
@@ -361,10 +361,13 @@ check_innerfunc_sort(List) ->
     end.
 
 show_ms_in_savedlistbox(MatchSpecList) ->
-    MsOrAlias = fun(#match_spec{alias = A, str_ms = M}) ->
+    MsOrAlias = fun(#match_spec{alias = A, str_ms = M, fun2ms = F}) ->
 			case A of
 			    undefined ->
-				M;
+				if 
+				    F =:= undefined -> M;
+				    true -> F
+				end;
 			    _ ->
 				A
 			end
@@ -372,8 +375,8 @@ show_ms_in_savedlistbox(MatchSpecList) ->
     [MsOrAlias(X) || X <- MatchSpecList].
 
 
-find_and_format_ms(Ms, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun} | T ]) ->
-    case (Ms =:= Spec) or (Ms =:= Alias) of
+find_and_format_ms(Selection, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun} | T ]) ->
+    case ((Selection =:= Spec) or (Selection =:= Alias)) or (Selection =:= Fun) of
 	true ->
 	    case Fun of
 		undefined ->
@@ -382,15 +385,15 @@ find_and_format_ms(Ms, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun}
 		    Fun
 	    end;
 	false ->
-	    find_and_format_ms(Ms, T)
+	    find_and_format_ms(Selection, T)
     end.
 
-find_ms([], _) ->
-    #match_spec{};
-find_ms(Str, [ #match_spec{str_ms = Spec, alias = Alias} = MS | T ]) ->
-    case (Str =:= Spec) or (Str =:= Alias) of
+find_ms(_, []) ->
+    {nomatch, #match_spec{}};
+find_ms(Str, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun} = MS | T ]) ->
+    case ((Str =:= Spec) or (Str =:= Alias)) or (Str =:= Fun) of
 	true ->
-	    MS;
+	    {match, MS};
 	false ->
 	    find_ms(Str, T)
     end.
@@ -422,7 +425,7 @@ create_matchspec_page(Parent, MatchSpecs, UserData) ->
 
     AddMsBtn = wxButton:new(Panel, ?MATCHPAGE_ADDMS, [{label, "Add"}]),
     AddMsAliasBtn = wxButton:new(Panel, ?MATCHPAGE_ADDMS_ALIAS, [{label, "Add with alias"}]),
-    Fun2MSBtn = wxButton:new(Panel, ?MATCHPAGE_FUN2MS, [{label, "Fun2ms"}]),
+    Fun2MSBtn = wxButton:new(Panel, ?MATCHPAGE_ADDFUN, [{label, "Add fun"}]),
     wxSizer:add(BtnSz, AddMsBtn),
     wxSizer:add(BtnSz, AddMsAliasBtn),
     wxSizer:add(BtnSz, Fun2MSBtn),
@@ -563,27 +566,34 @@ find_index([Sel|STail] = Selections, FunctionList, N, Acc) when is_list(Sel) ->
 atomlist_to_stringlist(Modules) ->
     [atom_to_list(X) || X <- Modules].
 
+ensure_last_is_dot(String) ->
+    case lists:last(String) =:= $. of
+	true ->
+	    String;
+	false ->
+	    String ++ "."
+    end.
 
-check_correct_MS([]) ->
-    false;
 check_correct_MS(String) ->
-    Tokens =
-	case lists:last(String) =:= $. of
-	    true ->
-		try_scan(String);
-	    false ->
-		try_scan(String ++ ".")
-	end,
-    io:format("Tokens: ~p~n", [Tokens]),
-    
+    Tokens = try_scan(ensure_last_is_dot(String)),
     case try_parse(Tokens) of
 	{ok, Term} ->
-	    check_correct_ms_format(Term);
+	    case erlang:match_spec_test([], Term, trace) of
+		{ok, _, _, _} ->
+		    {true, Term};
+		{error, List} ->
+		    Reason = unparse_error_msg(List, []),
+		    {false, Reason}
+	    end;
 	error ->
-	    false
+	    {false, "Invalid term"}
     end.
-    
 
+unparse_error_msg([], Acc) ->
+    lists:reverse(Acc);
+unparse_error_msg([{_, Reason} | T], Acc) ->
+    unparse_error_msg(T, [Reason ++ "\n" | Acc]).
+    
 try_scan(String) ->
     try	
 	erl_scan:string(String) of
@@ -607,21 +617,6 @@ try_parse(Tokens) ->
 	    error
     end.
 	
-
-check_correct_ms_format([H|T] = Term) when length(Term) >= 1,
-					   is_tuple(H), size(H) =:= 3->
-    N = length(T),
-    check_correct_ms_format(T, N, Term);
-check_correct_ms_format(_Other) ->
-    false.
-
-check_correct_ms_format([], 0, Term) ->
-    {true, Term};
-check_correct_ms_format([H|T], N, Term) when is_tuple(H), size(H) =:= 3 ->
-    check_correct_ms_format(T, N-1, Term);
-check_correct_ms_format(_Other, _, _) ->
-    false.
-
 update_matchspec_listbox(Str, {PopupBox, PageBox}, From) ->
     case From of
 	matchpopup ->
@@ -630,6 +625,46 @@ update_matchspec_listbox(Str, {PopupBox, PageBox}, From) ->
 	matchpage -> 
 	    wxControlWithItems:append(PageBox, Str)
     end.
+
+
+dbg_from_string(Str0) ->
+    Str = unicode:characters_to_list(Str0),
+    case erl_scan:string(Str) of
+	{ok, Tokens,_} ->
+	    case erl_parse:parse_exprs(Tokens) of
+		{ok,[{'fun',_,{clauses, Cl}}]} ->
+		    case ms_transform:
+			transform_from_shell(dbg,Cl,orddict:new()) of
+			{error, [{_,[{Line,ms_transform,Info}]}],_} ->
+			    {error,{Line,ms_transform,Info}};
+			{error, _} = ET1 ->
+			    ET1;
+			Else ->
+			    {ok, Else, "[" ++ lists:flatten(io_lib:format("~p", Else)) ++ "]"}
+		    end;
+		{ok,_} ->
+		    {error, {1,ms_transform,1}};
+		{error,Reason} ->
+		    {error,Reason}
+	    end;
+	{error,Reason2,_} ->
+	    {error,Reason2}
+    end.
+
+create_msgdialog(Frame, Msg) ->
+    wxDialog:showModal(wxMessageDialog:new(Frame, Msg)).
+
+get_correct_matchspec_components(From, State) ->
+    case From of
+	matchpage ->
+	    {State#traceopts_state.matchpage_styled_txtctrl,
+	     State#traceopts_state.frame};
+	matchpopup ->
+	    {State#traceopts_state.matchspec_popup_styled_txtctrl,
+	     State#traceopts_state.matchspec_popup_dialog}
+    end.
+    
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 						%Trace option window
@@ -731,24 +766,40 @@ handle_event(#wx{id = ?MATCHPAGE_LISTBOX,
 		 event = #wxCommand{type = command_listbox_selected},
 		 userData = From},
 	     #traceopts_state{match_specs = MatchSpecs} = State) ->
-        
-    StyledTxtCtrl = case From of
-    			matchpage ->
-    			    State#traceopts_state.matchpage_styled_txtctrl;
-    			matchpopup ->
-    			    State#traceopts_state.matchspec_popup_styled_txtctrl
-    		    end,
+    {StyledTxtCtrl, _} = get_correct_matchspec_components(From, State),
     SavedTxt = wxControlWithItems:getStringSelection(ListBox),
     MsOrFun = find_and_format_ms(SavedTxt, MatchSpecs),
     wxStyledTextCtrl:setText(StyledTxtCtrl, MsOrFun),
     {noreply, State};
 
-handle_event(#wx{id = ?MATCHPAGE_FUN2MS,
+handle_event(#wx{id = ?MATCHPAGE_ADDFUN,
 		 event = #wxCommand{type = command_button_clicked},
 		 userData = From},
-	     #traceopts_state{frame = Frame} = State) ->
-    io:format("Not implemented... yet!~n"),
-    {noreply, State};
+	     #traceopts_state{match_specs = MatchSpecs,
+			      matchpage_listbox = PageListBox,
+			      matchspec_popup_listbox = PopupListBox} = State) ->
+    
+    {StyledTxtCtrl, Frame} = get_correct_matchspec_components(From, State),
+    StrFun = ensure_last_is_dot(wxStyledTextCtrl:getText(StyledTxtCtrl)),
+    
+    MatchSpecs2 = case dbg_from_string(StrFun) of
+		      {ok, TermMS, StrMS} ->
+			  FunMS = #match_spec{str_ms = StrMS, term_ms = TermMS, fun2ms = StrFun},
+			  case lists:member(FunMS, MatchSpecs) of
+			      true ->
+				  create_msgdialog(Frame, StrFun ++ "\nalready exists"),
+				  wxStyledTextCtrl:setText(StyledTxtCtrl, StrMS),
+				  MatchSpecs;
+			      false ->
+				  update_matchspec_listbox(StrFun, {PopupListBox, PageListBox}, From),
+				  lists:reverse([FunMS | MatchSpecs])
+			  end;
+		      {error, {_, Module, What}} ->
+			  FailMsg = Module:format_error(What),
+			  create_msgdialog(Frame, FailMsg),
+			  MatchSpecs
+		  end,
+    {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
 
 handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 		 event = #wxCommand{type = command_button_clicked},
@@ -757,23 +808,21 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 			      matchpage_listbox = PageListBox,
 			      matchspec_popup_listbox = PopupListBox} = State) ->
     
-    {StyledTxtCtrl, Frame} = case From of
-				 matchpage ->
-				     {State#traceopts_state.matchpage_styled_txtctrl,
-				      State#traceopts_state.frame};
-				 matchpopup ->
-				     {State#traceopts_state.matchspec_popup_styled_txtctrl,
-				      State#traceopts_state.matchspec_popup_dialog}
-			     end,
-    
+    {StyledTxtCtrl, Frame} = get_correct_matchspec_components(From, State),
     StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
 		      {true, TermMS} ->
-			  update_matchspec_listbox(StrMS, {PopupListBox, PageListBox}, From),
-			  lists:reverse([#match_spec{str_ms = StrMS, term_ms = TermMS} | MatchSpecs]);
-		      false ->
-			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification"),
-			  wxDialog:showModal(MsgDialog),
+			  MS = #match_spec{str_ms = StrMS, term_ms = TermMS},
+			  case lists:member(MS, MatchSpecs) of
+			      true ->
+				  create_msgdialog(Frame, StrMS ++ "\nalready exists"),
+				  MatchSpecs;
+			      false ->
+				  update_matchspec_listbox(StrMS, {PopupListBox, PageListBox}, From),
+				  lists:reverse([MS | MatchSpecs])
+			  end;
+		      {false, Reason} ->
+			  create_msgdialog(Frame, Reason),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
@@ -786,16 +835,9 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 			      matchpage_listbox = PageListBox,
 			      matchspec_popup_listbox = PopupListBox} = State) ->
     
-    {StyledTxtCtrl, Frame} = case From of
-				 matchpage ->
-				     {State#traceopts_state.matchpage_styled_txtctrl,
-				      State#traceopts_state.frame};
-				 matchpopup ->
-				     {State#traceopts_state.matchspec_popup_styled_txtctrl,
-				      State#traceopts_state.matchspec_popup_dialog}
-			     end,
+    {StyledTxtCtrl, Frame} = get_correct_matchspec_components(From, State),
+    StrMS = ensure_last_is_dot(wxStyledTextCtrl:getText(StyledTxtCtrl)),
     
-    StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
     MatchSpecs2 = case check_correct_MS(StrMS) of
 		      {true, TermMS} ->
 			  Dialog = wxTextEntryDialog:new(Frame, "Enter ms alias: "),
@@ -805,17 +847,28 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 				      ?wxID_CANCEL ->
 					  ""
 				  end,
+			  
 			  case Alias of
 			      "" ->
+				  create_msgdialog(Frame, "Bad alias"),
 				  MatchSpecs;
+			      
 			      _ ->
-				  update_matchspec_listbox(Alias, {PopupListBox, PageListBox}, From),
-				  lists:reverse([#match_spec{alias = Alias, str_ms = StrMS, 
-							     term_ms = TermMS} | MatchSpecs])
+				  MS = #match_spec{alias = Alias, str_ms = StrMS, 
+						   term_ms = TermMS},
+				  {OccupiedAlias, _} = find_ms(Alias, MatchSpecs),
+				  
+				  if 
+				      OccupiedAlias =:= match -> 
+					  create_msgdialog(Frame, "Alias " ++ Alias ++ "\nalready exists"),
+					  MatchSpecs;
+				      true ->
+					  update_matchspec_listbox(Alias, {PopupListBox, PageListBox}, From),
+					  lists:reverse([MS | MatchSpecs])
+				  end
 			  end;
-		      false ->
-			  MsgDialog = wxMessageDialog:new(Frame, "Invalid match specification!"),
-			  wxDialog:showModal(MsgDialog),
+		      {false, Reason} ->
+			  create_msgdialog(Frame, Reason),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
@@ -837,7 +890,7 @@ handle_event(#wx{id = ?wxID_APPLY,
 	    false ->
 		[]
 	end,
-    MS = find_ms(StrSelection, MatchSpecs),
+    {_, MS} = find_ms(StrSelection, MatchSpecs),
     RootId = wxTreeCtrl:getRootItem(Tree),
     ItemParent = wxTreeCtrl:getItemParent(Tree, Item),
     
