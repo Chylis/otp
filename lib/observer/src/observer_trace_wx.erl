@@ -15,11 +15,8 @@
 -define(SAVE_BUFFER, 2).
 -define(CLOSE, 3).
 -define(CLEAR, 4).
--define(ALL_LINKED, 5).
--define(LINKED_PROCESS, 6).
--define(KILL, 7).
--define(VIEW_MODULE, 8).
--define(FIRST_MODULE, 9).
+-define(SAVE_TRACEOPTS, 5).
+-define(LOAD_TRACEOPTS, 6).
 
 -record(match_spec, {alias,
 		     term_ms = [],
@@ -98,8 +95,7 @@ create_window(ParentFrame, TraceOpts) ->
 
     %% Buttons
     ToggleButton = wxToggleButton:new(Panel, ?wxID_ANY, "Start Trace", []),
-    wxSizer:add(Sizer, ToggleButton, [{proportion, 0},
-				      {flag, ?wxEXPAND bor ?wxALL},
+    wxSizer:add(Sizer, ToggleButton, [{flag, ?wxALL},
 				      {border, 5}]),
     wxMenu:connect(ToggleButton, command_togglebutton_clicked, []),
 
@@ -124,12 +120,18 @@ create_window(ParentFrame, TraceOpts) ->
 create_menues(MenuBar) ->
     observer_wx:create_menu(
       [
-       {"&File", [#create_menu{id = ?OPTIONS, text = "&Trace Options"},
-		 #create_menu{id = ?SAVE_BUFFER, text = "&Save buffer"},
-		 #create_menu{id = ?CLOSE, text = "&Close"}
+       {"File", [
+		 #create_menu{id = ?LOAD_TRACEOPTS, text = "Load settings"},
+		 #create_menu{id = ?SAVE_TRACEOPTS, text = "Save settings"},
+		 #create_menu{id = ?SAVE_BUFFER, text = "Save buffer"},
+		 #create_menu{id = ?CLOSE, text = "Close"}
 		]},
-       {"&View", [#create_menu{id = ?CLEAR, text = "&Clear buffer"}
-		]}
+       {"View", [
+		 #create_menu{id = ?CLEAR, text = "Clear buffer"}
+		]},
+       {"Options", [
+		    #create_menu{id = ?OPTIONS, text = "Trace options"}
+		   ]}
       ],
       MenuBar).
 
@@ -177,6 +179,25 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
     end,
     {noreply, State};
 
+handle_event(#wx{id = ?SAVE_TRACEOPTS,
+		 event = #wxCommand{type = command_menu_selected}},
+	     #state{trace_options = TraceOpts,
+		    traced_funcs = TracedDict,
+		    match_specs = MatchSpecs,
+		    traced_procs = TracedProcs} = State) ->
+    io:format("Not implemented... yet!~n"),
+    {noreply, State};
+
+handle_event(#wx{id = ?LOAD_TRACEOPTS,
+		 event = #wxCommand{type = command_menu_selected}},
+	     #state{trace_options = TraceOpts,
+		    traced_funcs = TracedDict,
+		    match_specs = MatchSpecs,
+		    traced_procs = TracedProcs} = State) ->
+    io:format("Not implemented... yet!~n"),
+    {noreply, State};
+    
+
 handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
     io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
     {stop, shutdown, State};
@@ -202,11 +223,6 @@ handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, command
     wxToggleButton:setLabel(ToggleBtn, "Start Trace"),
     {noreply, State};
 
-%% handle_event(#wx{id = ?wxID_SAVE, event = #wxCommand{type = command_button_clicked}}, State) -> %Bör save finnas?
-%%     File = ?MODULE:save_options(State#state.trace_options),
-%%     State#state.parent ! {save, File},
-%%     {noreply, State};
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -231,7 +247,6 @@ handle_info(traceopts_closed, State) ->
     {noreply, State#state{traceoptions_open = false}};
 
 handle_info(Tuple, #state{text_ctrl = TxtCtrl} = State) when is_tuple(Tuple) ->
-    io:format("Incoming tuple: ~p~n", [Tuple]),
     Text = textformat(Tuple),
     wxTextCtrl:appendText(TxtCtrl, lists:flatten(Text)),
     {noreply, State};
