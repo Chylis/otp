@@ -41,6 +41,14 @@ MODULES= \
 	etop_gui \
 	etop_tr \
 	etop_txt \
+	observer_wx \
+	observer_pro_wx \
+	observer_sys \
+	observer_sys_wx \
+	observer_trace_wx \
+	observer_traceoptions_wx \
+	observer_tv_table \
+	observer_tv_wx \
 	ttb \
 	ttb_et
 HRL_FILES= \
