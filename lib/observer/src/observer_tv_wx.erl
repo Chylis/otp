@@ -105,8 +105,8 @@ handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	      Key -> Opt0#opt{sort_incr=not Bool};
 	      NewKey -> Opt0#opt{sort_key=NewKey}
 	  end,
-    Tables = ?TC(get_tables(Node, Opt)),
-    Tabs = ?TC(update_grid(Grid, Opt, Tables)),
+    Tables = get_tables(Node, Opt),
+    Tabs = update_grid(Grid, Opt, Tables),
     wxWindow:setFocus(Grid),
     {noreply, State#state{opt=Opt, tabs=Tabs}};
 
@@ -134,12 +134,10 @@ handle_event(#wx{event=#wxSize{size={W,_}}},  State=#state{grid=Grid}) ->
 	     end),
     {noreply, State};
 
-handle_event(#wx{obj=Grid, 
-		 event=_Ev=#wxList{type=command_list_item_activated, 
+handle_event(#wx{obj=Grid,
+		 event=_Ev=#wxList{type=command_list_item_activated,
 				   itemIndex=Index}},
 	     State=#state{grid=Grid, node=Node, opt=#opt{type=Type}, tabs=Tabs}) ->
-    %% TableName = wxListCtrl:getItemText(Grid, Index),
-    %% io:format("\rSelected: ~p ~p~n ~p => ~p~n",[Index, TableName, _Ev, lists:nth(Index+1, Tabs)]),
     Table = lists:nth(Index+1, Tabs),
     observer_tv_table:start_link(Grid, [{node,Node}, {type,Type}, {table,Table}]),
     {noreply, State};
@@ -188,7 +186,7 @@ code_change(_, _, State) ->
 
 create_menus(Parent) ->
     MenuEntries = [{"View",
-		    [#create_menu{id = ?ID_REFRESH, text = "&Refresh"},
+		    [#create_menu{id = ?ID_REFRESH, text = "Refresh\tCtrl-R"},
 		     separator,
 		     #create_menu{id = ?ID_ETS, text = "&Ets Tables", type=radio, check=true},
 		     #create_menu{id = ?ID_MNESIA, text = "&Mnesia Tables", type=radio},
@@ -201,7 +199,8 @@ get_tables(Node, Opt) ->
     case rpc:call(Node, ?MODULE, get_table_list, [Opt]) of
 	{badrpc, Error} ->
 	    handle_error(Error);
-	Result -> Result
+	Result ->
+	    Result
     end.
 
 get_table_list(#opt{type=ets, unread_hidden=HideUnread, sys_hidden=HideSys}) ->
@@ -229,7 +228,10 @@ get_table_list(#opt{type=ets, unread_hidden=HideUnread, sys_hidden=HideSys}) ->
 				  readable = Readable,
 				  owner = Owner,
 				  size = ets:info(Id, size),
-				  reg_name = RegName},
+				  reg_name = RegName,
+				  type = ets:info(Id, type),
+				  keypos = ets:info(Id, keypos)
+				 },
 		       [Tab|Acc]
 		   catch _:_What ->
 			   %% io:format("Skipped ~p: ~p ~n",[Id, _What]),
@@ -248,7 +250,10 @@ get_table_list(#opt{type=mnesia, sys_hidden=HideSys}) ->
 		       Tab = #tab{name = Name,
 				  owner = Owner,
 				  size = mnesia:table_info(Id, size),
-				  reg_name = RegName},
+				  reg_name = RegName,
+				  type = mnesia:table_info(Id, type),
+				  keypos = 2
+				 },
 		       [Tab|Acc]
 		   catch _:_What ->
 			   %% io:format("Skipped ~p: ~p ~n",[Id, _What]),

@@ -52,6 +52,7 @@
 	  status,
 	  sizer,
 	  search,
+	  selected,
 	  node=node(),
 	  columns,
 	  pid,
@@ -179,7 +180,7 @@ create_menus(MB) ->
     wxMenuBar:append(MB, File, "File"),
     Edit = wxMenu:new(),
     wxMenu:append(Edit, ?ID_EDIT, "Edit Object"),
-    wxMenu:append(Edit, ?ID_DELETE, "Delete Object"),
+    wxMenu:append(Edit, ?ID_DELETE, "Delete Object\tCtrl-D"),
     wxMenu:appendSeparator(Edit),
     wxMenu:append(Edit, ?ID_SEARCH, "Search\tCtrl-S"),
     wxMenu:appendSeparator(Edit),
@@ -218,8 +219,42 @@ search_area(Parent) ->
     #search{name='Search Area', win=HSz,
 	    search=TC1,goto=TC2,radio={Nbtn,Pbtn,Cbtn}}.
 
-%% handle_event(#wx{id=?ID_REFRESH},State = #state{node=Node, grid=Grid}) ->
-%%     {noreply, State};
+edit(Index, #state{pid=Pid, frame=Frame}) ->
+    Str = get_row(Pid, Index, all),
+    Dialog = wxTextEntryDialog:new(Frame, "Edit object:", [{value, Str}]),
+    case wxTextEntryDialog:showModal(Dialog) of
+	?wxID_OK ->
+	    New = wxTextEntryDialog:getValue(Dialog),
+	    wxTextEntryDialog:destroy(Dialog),
+	    case Str =:= New of
+		true -> ok;
+		false ->
+		    complete_edit(Index, New, Pid)
+	    end;
+	?wxID_CANCEL ->
+	    wxTextEntryDialog:destroy(Dialog)
+    end.
+
+complete_edit(Row, New0, Pid) ->
+    New = case lists:reverse(New0) of
+	      [$.|_] -> New0;
+	      _ -> New0 ++ "."
+	  end,
+    try
+	{ok, Tokens, _} = erl_scan:string(New),
+	{ok, Term} = erl_parse:parse_term(Tokens),
+	Pid ! {edit, Row, Term}
+    catch _:{badmatch, {error, {_, _, Err}}} ->
+	    io:format("Parse error: ~p~n",[Err]),
+	    self() ! {error, ["Parse error", Err]};
+	  Err ->
+	    io:format("scan error: ~p~n",[Err]),
+	    self() ! {error, ["Syntax error in: ", New]}
+    end.
+
+handle_event(#wx{id=?ID_REFRESH},State = #state{pid=Pid}) ->
+    Pid ! refresh,
+    {noreply, State};
 
 handle_event(#wx{event=#wxList{type=command_list_col_click, col=Col}},
 	     State = #state{pid=Pid}) ->
@@ -242,6 +277,26 @@ handle_event(#wx{event=#wxList{type=command_list_item_selected, itemIndex=Index}
     N = wxListCtrl:getItemCount(Grid),
     Str = get_row(Pid, Index, all),
     wxStatusBar:setStatusText(StatusBar, io_lib:format("Objects: ~w: ~s",[N, Str])),
+    {noreply, State#state{selected=Index}};
+
+handle_event(#wx{event=#wxList{type=command_list_item_activated, itemIndex=Index}},
+	     State) ->
+    edit(Index, State),
+    {noreply, State};
+
+handle_event(#wx{id=?ID_EDIT}, State = #state{selected=undefined}) ->
+    {noreply, State};
+handle_event(#wx{id=?ID_EDIT}, State = #state{selected=Index}) ->
+    edit(Index, State),
+    {noreply, State};
+
+handle_event(#wx{id=?ID_DELETE}, State = #state{selected=undefined}) ->
+    {noreply, State};
+handle_event(#wx{id=?ID_DELETE},
+	     State = #state{pid=Pid, status=StatusBar, selected=Index}) ->
+    Str = get_row(Pid, Index, all),
+    Pid ! {delete, Index},
+    wxStatusBar:setStatusText(StatusBar, io_lib:format("Deleted object: ~s",[Str])),
     {noreply, State};
 
 handle_event(#wx{id=?wxID_CLOSE}, State) ->
@@ -315,7 +370,7 @@ handle_event(#wx{id=?SEARCH_ENTRY, event=#wxCommand{cmdString=Str}},
     try
 	Dir  = wxRadioButton:getValue(Next0),
 	Case = wxCheckBox:getValue(Case0),
-	Start = case Dir of 
+	Start = case Dir of
 		    true -> 0;
 		    false -> wxListCtrl:getItemCount(Grid)-1
 		end,
@@ -327,7 +382,7 @@ handle_event(#wx{id=?SEARCH_ENTRY, event=#wxCommand{cmdString=Str}},
 		   _ ->
 		       Find#find{strlen=length(Str)}
 	       end,
-	
+
 	Pid ! {mark_search_hit, false},
 	case search(Pid, Str, Cont#find.start, Dir, Case) of
 	    false ->
@@ -369,6 +424,13 @@ handle_info({new_cols, New}, State = #state{grid=Grid, columns=Cols0}) ->
 handle_info({refresh, Min, Max}, State = #state{grid=Grid}) ->
     wxListCtrl:refreshItems(Grid, Min, Max),
     {noreply, State};
+handle_info({error, Error}, State = #state{frame=Frame}) ->
+    io:format("Error Msg ~p~n",[Error]),
+    %% Dlg = wxMessageDialog:new(Frame, "Foobar"),
+    %% wxMessageDialog:showModal(Dlg),
+    %% wxMessageDialog:destroy(Dlg),
+    {noreply, State};
+
 handle_info(Event, State) ->
     io:format("~p:~p, handle info ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
@@ -424,10 +486,12 @@ search(Table, Str, Row, Dir, Case) ->
 
 -record(holder, {node, parent, pid,
 		 table=[], n=0, columns,
-		 vis_info,
+		 temp=[],
 		 search,
-		 source,
+		 source, tabid,
 		 sort,
+		 key,
+		 type,
 		 attrs
 		}).
 
@@ -436,10 +500,11 @@ init_table_holder(Parent, Table, MnesiaOrEts, Cols, Node, Attrs) ->
 		ignore -> Table#tab.name;
 		Id -> Id
 	    end,
-    Pid = rpc:call(Node, ?MODULE, get_table, [self(), TabId, MnesiaOrEts]),
-    table_holder(#holder{node=Node, parent=Parent, pid=Pid,
-			 vis_info=array:new(),
-			 source=MnesiaOrEts, columns=Cols,
+    self() ! refresh,
+    table_holder(#holder{node=Node, parent=Parent,
+			 source=MnesiaOrEts, tabid=TabId, columns=Cols,
+			 sort=#opt{sort_key=Table#tab.keypos, sort_incr=true},
+			 type=Table#tab.type, key=Table#tab.keypos,
 			 attrs=Attrs}).
 
 table_holder(S0 = #holder{parent=Parent, pid=Pid, table=Table}) ->
@@ -461,6 +526,20 @@ table_holder(S0 = #holder{parent=Parent, pid=Pid, table=Table}) ->
 	    Old = S0#holder.search,
 	    is_integer(Old) andalso (Parent ! {refresh, Old, Old}),
 	    table_holder(S0#holder{search=Row});
+	refresh when is_pid(Pid) ->
+	    %% Already getting the table...
+	    io:format("ignoring refresh", []),
+	    table_holder(S0);
+	refresh ->
+	    GetTab = rpc:call(S0#holder.node, ?MODULE, get_table,
+			      [self(), S0#holder.tabid, S0#holder.source]),
+	    table_holder(S0#holder{pid=GetTab});
+	{delete, Row} ->
+	    delete_row(Row, S0),
+	    table_holder(S0);
+	{edit, Row, Term} ->
+	    edit_row(Row, Term, S0),
+	    table_holder(S0);
 	What ->
 	    io:format("Table holder got ~p~n",[What]),
 	    table_holder(S0)
@@ -475,23 +554,29 @@ handle_new_data_chunk(Data, S0 = #holder{columns=Cols, parent=Parent}) ->
 	    S1
     end.
 
-handle_new_data_chunk2('$end_of_table', S0 = #holder{parent=Parent, n=N}) ->
+handle_new_data_chunk2('$end_of_table',
+		       S0 = #holder{parent=Parent, sort=Opt,
+				    key=Key,
+				    table=Old, temp=New}) ->
+    Table = merge(Old, New, Key),
+    N = length(Table),
     Parent ! {no_rows, N},
-    S0;
-handle_new_data_chunk2(Data, S0 = #holder{n=N0, columns=Cols0, source=ets, table=Tab0}) ->
-    {Tab, Cols, N} = parse_ets_data(Data, N0, Cols0, Tab0),
-    S0#holder{n=N, columns=Cols, table=Tab};
-handle_new_data_chunk2(Data, S0 = #holder{n=N0, source=mnesia, table=Tab}) ->
-    N = length(Data),
-    S0#holder{n=N+N0, table=(lists:append(Data) ++ Tab)}.
+    sort(Opt#opt.sort_key, S0#holder{n=N, pid=undefine,
+				     sort=Opt#opt{sort_key = undefined},
+				     table=Table, temp=[]});
+handle_new_data_chunk2(Data, S0 = #holder{columns=Cols0, source=ets, temp=Tab0}) ->
+    {Tab, Cols} = parse_ets_data(Data, Cols0, Tab0),
+    S0#holder{columns=Cols, temp=Tab};
+handle_new_data_chunk2(Data, S0 = #holder{source=mnesia, temp=Tab}) ->
+    S0#holder{temp=(Data ++ Tab)}.
 
-parse_ets_data([[Rec]|Rs], N, C, Tab) ->
-    parse_ets_data(Rs, N+1, max(tuple_size(Rec), C), [Rec|Tab]);
-parse_ets_data([Recs|Rs], N0, C0, Tab0) ->
-    {Tab, Cols, N} = parse_ets_data(Recs, N0, C0, Tab0),
-    parse_ets_data(Rs, N, Cols, Tab);
-parse_ets_data([], N, Cols, Tab) ->
-    {Tab, Cols, N}.
+parse_ets_data([[Rec]|Rs], C, Tab) ->
+    parse_ets_data(Rs, max(tuple_size(Rec), C), [Rec|Tab]);
+parse_ets_data([Recs|Rs], C0, Tab0) ->
+    {Tab, Cols} = parse_ets_data(Recs, C0, Tab0),
+    parse_ets_data(Rs, Cols, Tab);
+parse_ets_data([], Cols, Tab) ->
+    {Tab, Cols}.
 
 sort(Col, S=#holder{n=N, parent=Parent, sort=Opt0, table=Table0}) ->
     {Opt, Table} = sort(Col, Opt0, Table0),
@@ -500,8 +585,28 @@ sort(Col, S=#holder{n=N, parent=Parent, sort=Opt0, table=Table0}) ->
 
 sort(Col, Opt = #opt{sort_key=Col, sort_incr=Bool}, Table) ->
     {Opt#opt{sort_incr=not Bool}, lists:reverse(Table)};
-sort(Col, _, Table) ->
-    {#opt{sort_key=Col}, lists:keysort(Col, Table)}.
+sort(Col, #opt{sort_incr=true}, Table) ->
+    {#opt{sort_key=Col}, keysort(Col, Table)};
+sort(Col, #opt{sort_incr=false}, Table) ->
+    {#opt{sort_key=Col}, lists:reverse(keysort(Col, Table))}.
+
+keysort(Col, Table) ->
+    Sort = fun([A0|_], [B0|_]) ->
+		   A = try element(Col, A0) catch _:_ -> [] end,
+		   B = try element(Col, B0) catch _:_ -> [] end,
+		   case A == B of
+		       true -> A0 =< B0;
+		       false -> A < B
+		   end;
+	      (A0, B0) when is_tuple(A0), is_tuple(B0) ->
+		   A = try element(Col, A0) catch _:_ -> [] end,
+		   B = try element(Col, B0) catch _:_ -> [] end,
+		   case A == B of
+		       true -> A0 =< B0;
+		       false -> A < B
+		   end
+	   end,
+    lists:sort(Sort, Table).
 
 search([Str, Row, Dir0, CaseSens],
        S=#holder{parent=Parent, table=Table}) ->
@@ -533,9 +638,9 @@ search(Row, Dir, Re, Table) ->
 
 get_row(From, Row, Col, Table) ->
     case lists:nth(Row+1, Table) of
-	Object when Col =:= all ->
+	[Object|_] when Col =:= all ->
 	    From ! {self(), io_lib:format("~w", [Object])};
-	Object when tuple_size(Object) >= Col ->
+	[Object|_] when tuple_size(Object) >= Col ->
 	    From ! {self(), io_lib:format("~w", [element(Col, Object)])};
 	_ ->
 	    From ! {self(), ""}
@@ -544,16 +649,89 @@ get_row(From, Row, Col, Table) ->
 get_attr(From, Row, #holder{attrs=Attrs, search=Row}) ->
     What = Attrs#attrs.searched,
     From ! {self(), What};
-get_attr(From, Row, #holder{vis_info=Table, attrs=Attrs}) ->
-    What = case array:get(Row, Table) of
-	       deleted  -> Attrs#attrs.deleted;
-	       changed  -> Attrs#attrs.changed;
-	       undefined when (Row rem 2) > 0 ->
+get_attr(From, Row, #holder{table=Table, attrs=Attrs}) ->
+    What = case lists:nth(Row+1, Table) of
+	       [_|deleted]  -> Attrs#attrs.deleted;
+	       [_|changed]  -> Attrs#attrs.changed;
+	       [_|new]      -> Attrs#attrs.changed;
+	       _ when (Row rem 2) > 0 ->
 		   Attrs#attrs.odd;
-	       undefined ->
+	       _ ->
 		   Attrs#attrs.even
 	   end,
     From ! {self(), What}.
+
+merge([], New, _Key) ->
+    [[N] || N <- New]; %% First time
+merge(Old, New, Key) ->
+    merge2(keysort(Key, Old), keysort(Key, New), Key).
+
+merge2([[Obj|_]|Old], [Obj|New], Key) ->
+    [[Obj]|merge2(Old, New, Key)];
+merge2([[A|_]|Old], [B|New], Key)
+  when element(Key, A) == element(Key, B) ->
+    [[B|changed]|merge2(Old, New, Key)];
+merge2([[A|_]|Old], New = [B|_], Key)
+  when element(Key, A) < element(Key, B) ->
+    [[A|deleted]|merge2(Old, New, Key)];
+merge2(Old = [[A|_]|_], [B|New], Key)
+  when element(Key, A) > element(Key, B) ->
+    [[B|new]|merge2(Old, New, Key)];
+merge2([], New, _Key) ->
+    [[N|new] || N <- New];
+merge2(Old, [], _Key) ->
+    [[O|deleted] || [O|_] <- Old].
+
+
+delete_row(Row, S0 = #holder{parent=Parent}) ->
+    case delete(Row, S0) of
+	ok ->
+	    self() ! refresh;
+	{error, Err} ->
+	    Parent ! {error, "Could not delete object: " ++ Err}
+    end.
+
+
+delete(Row, #holder{tabid=Id, table=Table,
+		    source=Source, node=Node}) ->
+    [Object|_] = lists:nth(Row+1, Table),
+    try
+	case Source of
+	    ets ->
+		true = rpc:call(Node, ets, delete_object, [Id, Object]);
+	    mnesia ->
+		ok = rpc:call(Node, mnesia, dirty_delete_object, [Id, Object])
+	end,
+	ok
+    catch _:Error ->
+	    io:format("~p:~p: Error ~p ~p~n",[?MODULE,?LINE, Error, erlang:get_stacktrace()]),
+	    {error, "node or table is not available"}
+    end.
+
+edit_row(Row, Term, S0 = #holder{parent=Parent}) ->
+    case delete(Row, S0) of
+	ok ->
+	    case insert(Term, S0) of
+		ok -> self() ! refresh;
+		Err -> Parent ! {error, Err}
+	    end;
+	{error, Err} ->
+	    Parent ! {error, "Could not edit object: " ++ Err}
+    end.
+
+insert(Object, #holder{tabid=Id, source=Source, node=Node}) ->
+    try
+	case Source of
+	    ets ->
+		true = rpc:call(Node, ets, insert, [Id, Object]);
+	    mnesia ->
+		ok = rpc:call(Node, mnesia, dirty_write, [Id, Object])
+	end,
+	ok
+    catch _:Error ->
+	    io:format("~p:~p: Error ~p ~p~n",[?MODULE,?LINE, Error, erlang:get_stacktrace()]),
+	    {error, "node or table is not available"}
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 get_table(Parent, Table, Module) ->
@@ -584,7 +762,8 @@ get_table2(Parent, Table, Type) ->
 	    Get = fun() ->
 			  get_mnesia_loop(Parent, mnesia:select(Table, Ms, NoElements, read))
 		  end,
-	    mnesia:transaction(Get)
+	    %% Not a transaction, we don't want to grab locks when inspecting the table
+	    mnesia:async_dirty(Get)
     end.
 
 get_ets_loop(Parent, '$end_of_table') ->
@@ -622,7 +801,7 @@ create_attrs() ->
     Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),
     #attrs{even = wx:typeCast(wx:null(), wxListItemAttr),
 	   odd  = wxListItemAttr:new(Text, {240,240,255}, Font),
-	   deleted = wxListItemAttr:new({240,30,30}, {10,10,10}, Font),
+	   deleted = wxListItemAttr:new({240,30,30}, {100,100,100}, Font),
 	   changed = wxListItemAttr:new(Text, {255,215,0}, Font),
 	   searched = wxListItemAttr:new(Text, {235,215,90}, Font)
 	  }.
