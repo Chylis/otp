@@ -224,9 +224,9 @@ handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
 
-handle_info({statusbar, Msg}, State) ->
-    wxStatusBar:setStatusText(State#state.status_bar, Msg),
-    {noreply, State};
+%% handle_info({statusbar, Msg}, State) ->
+%%     wxStatusBar:setStatusText(State#state.status_bar, Msg),
+%%     {noreply, State};
 
 handle_info({nodeup, _Node}, State) ->
     State2 = update_node_list(State),
