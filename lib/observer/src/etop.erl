@@ -19,7 +19,7 @@
 -module(etop).
 -author('siri@erix.ericsson.se').
 
--export([start/0, start/1, config/2, stop/0, dump/1, help/0]).
+-export([start/1, start/2, config/2, stop/0, dump/1, help/0, init_data_handler/1]).
 %% Internal
 -export([update/1]).
 -export([loadinfo/1, meminfo/2, getopt/2]).
@@ -88,14 +88,13 @@ dump(File) ->
 	Error -> Error
     end.
 
-start() ->
-    start([]).
+start(WxPid) ->
+    start(WxPid, []).
     
-start(Opts) ->
+start(WxPid, Opts) ->
     process_flag(trap_exit, true),
     Config1 = handle_args(init:get_arguments() ++ Opts, #opts{}),
     Config2 = Config1#opts{server=self()},
-
     %% Connect to the node we want to look at
     Node = getopt(node, Config2),
     case net_adm:ping(Node) of
@@ -106,7 +105,6 @@ start(Opts) ->
 	_pong ->
 	    check_runtime_tools_vsn(Node)
     end,
-
     %% Maybe set up the tracing
     Config3 = 
 	if Config2#opts.tracing == on, Node /= node() ->
@@ -124,12 +122,11 @@ start(Opts) ->
 		       [set,public,{keypos,#etop_proc_info.pid}]),
     Config4 = Config3#opts{accum_tab=AccumTab},
 
-    %% Start the output server
-    Out = spawn_link(Config4#opts.out_mod, init, [Config4]),
-    Config5 = Config4#opts{out_proc = Out},       
-    
-    init_data_handler(Config5),
-    ok.
+    %% Link the output server
+    link(WxPid),
+    Config5 = Config4#opts{out_proc = WxPid},
+    spawn_link(?MODULE, init_data_handler, [Config5]),
+    Config5.
 
 check_runtime_tools_vsn(Node) ->
     case rpc:call(Node,observer_backend,vsn,[]) of
@@ -175,7 +172,7 @@ data_handler(Reader, Opts) ->
 	    data_handler(Reader, Opts)
     end.
 
-stop(Opts) ->
+stop(Opts) -> %Undersök!
     (Opts#opts.out_mod):stop(Opts#opts.out_proc),
     if Opts#opts.tracing == on -> etop_tr:stop_tracer(Opts);
        true -> ok
@@ -317,7 +314,7 @@ handle_args([_| R], C) ->
 handle_args([], C) ->
     C.
 
-output(graphical) -> etop_gui;
+output(graphical) -> observer_pro_wx;
 output(text) -> etop_txt.
 
 
