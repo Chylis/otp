@@ -23,9 +23,7 @@
 
 %% wx_object callbacks
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
-	 handle_event/2, handle_cast/2, to_str/1, save_options/2]).
-
-
+	 handle_event/2, handle_cast/2, to_str/1]).
 
 -include_lib("wx/include/wx.hrl").
 -include_lib("runtime_tools/include/observer_backend.hrl").
@@ -33,14 +31,15 @@
 -include("observer_defs.hrl").
 
 %% Defines
--define(OBS_PRO, erltop).
+-define(OBS_PRO, etop).
 
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
--define(COL_REDS, 2).
--define(COL_MEM,  3).
--define(COL_MSG,  4).
--define(COL_FUN,  5).
+-define(COL_TIME, 2).
+-define(COL_REDS, 3).
+-define(COL_MEM,  4).
+-define(COL_MSG,  5).
+-define(COL_FUN,  6).
 
 -define(ID_KILL, 200).
 -define(ID_VIEW, 201).
@@ -73,6 +72,12 @@
 			on_all_link  = false,
 			main_window  = true}).
 
+-record(opts, {node=node(), port = 8415, accum = false, intv = 5000, lines = 30, 
+	       width = 700, height = 340, sort = runtime, tracing = on,
+	       %% Other state information
+	       out_mod=etop:output(graphical), out_proc, server, host, tracer, store, 
+	       accum_tab, remote}).
+
 
 -record(pro_wx_state, {parent,
 		       code_frame,
@@ -83,7 +88,6 @@
 		       selected, 
 		       frame,
 		       parent_notebook,
-		       sort_order = {#etop_proc_info.reds, decr},
 		       panel, 
 		       trace_options = #trace_options{},
 		       options_pid,
@@ -94,13 +98,9 @@
 		       hide_modules,
 		       hide_pids,
 		       tracemenu_opened,
-		       nodes}).
-
--record(opts, {node=node(), port = 8415, accum = false, intv = 5000, lines = 30, 
-	       width = 700, height = 340, sort = runtime, tracing = on,
-	       %% Other state information
-	       out_mod=erltop:output(graphical), out_proc, server, host, tracer, store, 
-	       accum_tab, remote}).
+		       nodes,
+		       sort_order = {#etop_proc_info.reds, decr},
+		       accum_tab}).
 
 start_link(Notebook, Parent) ->
     wx_object:start_link(?MODULE, [Notebook, Parent], []).
@@ -109,10 +109,12 @@ start_link(Notebook, Parent) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init([Notebook, Parent]) ->
     process_flag(trap_exit, true),
-    Config = ?OBS_PRO:start(self()),
+    Config = etop:start(self()),
     {ProPanel, State} = setup(Notebook, Parent),
-    Info = ?OBS_PRO:update(Config),
+    Info = etop:update(Config),
+    io:format("1"),
     refresh(Info, State),
+    io:format("2"),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {ProPanel, {Config, Info, State}}.
 
@@ -128,49 +130,26 @@ setup(Notebook, Parent) ->
     wxWindow:setSizer(ProPanel, Sizer),
     
     Interval = 50000, %erltop:getopt(intv, Config),
-
     
-    DefaultProcessInfo = [ % sorted
-			   error_handler,
-			   garbage_collection,
-			   group_leader,
-			   heap_size,
-			   links,
-			   priority,
-			   trap_exit,
-			   message_queue_len],
-    File = filename:join(os:getenv("HOME"), ".erlang_tools/obstop.opts"),
-    {Opt, ProcessInfo} =
-	case filelib:is_file(File) of
-	    true ->
-		case file:consult(File) of
-		    {ok, Terms} ->
-			parse_options(Terms, #trace_options{}, []);
-		    {error, Reason} ->
-			io:format("Error:  ~p\n", [Reason]),
-			{#trace_options{}, []}
-		end;
-	    false ->
-		{#trace_options{}, []}
-	end,
-    ProcessInfo2 =
-	case ProcessInfo of
-	    [] ->
-		DefaultProcessInfo;
-	    Other ->
-		Other
-	end,
+    ProcessInfo = [ % sorted
+		    error_handler,
+		    garbage_collection,
+		    group_leader,
+		    heap_size,
+		    links,
+		    priority,
+		    trap_exit,
+		    message_queue_len],
     
     State =  #pro_wx_state{parent = Parent,
 			   popup_menu  = Menu,
 			   grid        = Grid,
 			   frame       = ProPanel,
 			   parent_notebook = Notebook,
-			   trace_options = Opt,
-			   process_info = ProcessInfo2,
+			   process_info = ProcessInfo,
 			   interval = Interval,
 			   tracemenu_opened = false,
-			   nodes    = [node() | nodes()]}, %temporary nodes...!
+			   nodes = [node() | nodes()]}, %temporary nodes...!
     {ProPanel, State}.
 %% UI-creation
 
@@ -181,8 +160,7 @@ create_pro_menu(Parent) ->
 		     #create_menu{id = ?ID_HIDENEW, text = "Auto-hide new"}]},
 		   {"Options",
 		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"},
-		     #create_menu{id = ?ID_OPTIONS, text = "Options"},
-		     #create_menu{id = ?ID_SAVE_OPT, text = "Save options..."}]},
+		     #create_menu{id = ?ID_OPTIONS, text = "Options"}]},
 		   {"Trace",
 		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
 		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"},
@@ -204,8 +182,14 @@ create_popup_menu() ->
 
 
 create_list_box(Panel) ->
-    ListCtrl = wxListCtrl:new(Panel, [{style, ?wxLC_REPORT bor ?wxLC_HRULES },
-				      {size, {600, 500}}]),
+    Style = ?wxLC_REPORT bor ?wxLC_HRULES,% bor ?wxLC_VIRTUAL,
+    ListCtrl = wxListCtrl:new(Panel, [{style, Style}]),
+				      %% {onGetItemText,
+				      %%  fun(_, Item, Col) -> ok end},
+				      %% {onGetItemAttr,
+				      %%  fun(_, Item) -> ok end}
+				      %% ]),
+				      %% %{size    , {600, 500}}]),
     Li = wxListItem:new(),
     AddListEntry = fun({Name, Align, DefSize}, Col) ->
     			   wxListItem:setText(Li, Name),
@@ -214,8 +198,9 @@ create_list_box(Panel) ->
     			   wxListCtrl:setColumnWidth(ListCtrl, Col, DefSize),
     			   Col + 1
     		   end,
-    ListItems = [{"Pid", ?wxLIST_FORMAT_CENTRE,  80},
+    ListItems = [{"Pid", ?wxLIST_FORMAT_CENTRE,  120},
     		 {"Name or initial fun", ?wxLIST_FORMAT_LEFT, 200},
+		 {"Time", ?wxLIST_FORMAT_CENTRE, 50},
 		 {"Reds", ?wxLIST_FORMAT_CENTRE, 50},
     		 {"Memory", ?wxLIST_FORMAT_LEFT, 50},
     		 {"Msgs",  ?wxLIST_FORMAT_LEFT, 50},
@@ -224,8 +209,6 @@ create_list_box(Panel) ->
     lists:foldl(AddListEntry, 0, ListItems),
     wxListItem:destroy(Li),
     
-    %%wxListCtrl:connect(ListCtrl, size, [{skip, true}]),
-    %%wxListCtrl:connect(ListCtrl, grid_cell_left_click),
     wxListCtrl:connect(ListCtrl, size, [{skip, true}]),
     wxListCtrl:connect(ListCtrl, command_list_item_activated),
     wxListCtrl:connect(ListCtrl, command_list_item_right_click),
@@ -241,8 +224,9 @@ update_grid(Grid, {Sort,Dir}, ProcInfo0) ->
     wxListCtrl:deleteAllItems(Grid),
     
     Update =
-	fun(#etop_proc_info{pid = Pid,mem = Mem, reds = Reds,name = Name,
-			    cf = CF,mq = MQ}, Row) ->
+	fun(#etop_proc_info{pid = Pid, mem = Mem, reds = Reds,
+			    name = Name, runtime = RunTime, cf = CF,mq = MQ}, 
+	    Row) ->
 		wxListCtrl:insertItem(Grid, Row, ""),
 		if (Row rem 2) =:= 0 ->
 			wxListCtrl:setItemBackgroundColour(Grid, Row, {240,240,255});
@@ -251,7 +235,7 @@ update_grid(Grid, {Sort,Dir}, ProcInfo0) ->
 		lists:foreach(fun({Col, Val}) -> 
 				      wxListCtrl:setItem(Grid, Row, Col, to_str(Val))
 			      end,
-			      [{?COL_PID,Pid},  {?COL_NAME,Name},
+			      [{?COL_PID,Pid},  {?COL_NAME,Name}, {?COL_TIME,RunTime},
 			       {?COL_REDS,Reds},{?COL_MEM,Mem},
 			       {?COL_MSG, MQ},  {?COL_FUN,CF}
 			      ]),
@@ -263,45 +247,6 @@ update_grid(Grid, {Sort,Dir}, ProcInfo0) ->
 	       end,
     wx:foldl(Update, 0, ProcInfo),
     ok.
-
-save_options(#trace_options{send = Send,
-			    treceive = Receive,
-			    functions = Functions,
-			    events = Events,
-			    on_1st_spawn = On1stSpawn,
-			    on_all_spawn = OnAllSpawn,
-			    on_1st_link = On1stLink,
-			    on_all_link = OnAllLink},
-	     ProcessInfoList) ->
-    
-    ProcessInfo = 
-	lists:foldl(fun(Atom , Acc) ->
-			    ["{" ++ atom_to_list(Atom) ++ ", procinfo}.\n" | Acc]
-		    end, [], ProcessInfoList),
-
-    Dir = filename:join(os:getenv("HOME"), ".erlang_tools"),
-    file:make_dir(Dir), 
-    File = filename:join(Dir, "obstop.opts"),
-    
-    Binary =
-	list_to_binary("%%%\n%%% This file is generated by Observer\n"
-		       "%%%\n%%% DO NOT EDIT!\n%%%\n"
-		       "{send, " ++ atom_to_list(Send) ++ "}.\n"
-		       "{treceive, " ++ atom_to_list(Receive) ++ "}.\n"
-		       "{functions, " ++ atom_to_list(Functions) ++ "}.\n"
-		       "{events, " ++ atom_to_list(Events) ++ "}.\n"
-		       "{on_1st_spawn, " ++ atom_to_list(On1stSpawn) ++ "}.\n"
-		       "{on_all_spawn, " ++ atom_to_list(OnAllSpawn) ++ "}.\n"
-		       "{on_1st_link, " ++ atom_to_list(On1stLink) ++ "}.\n"
-		       "{on_all_link, " ++ atom_to_list(OnAllLink) ++ "}.\n" ++ ProcessInfo),
-
-    case file:write_file(File, Binary) of
-	ok ->
-	    io:format("File saved: ~p\n", [File]);
-	{error, Reason} ->
-	    io:format("{error, ~p}\n", [Reason])
-    end,
-    File.
 
 lookup_pid(#etop_info{procinfo = ProcInfo}, Pid) ->
     [Ret] = lists:filter(fun(#etop_proc_info{pid = Pid2}) ->
@@ -329,7 +274,8 @@ create_code_frame(Parent) ->
 			     [{style,?wxTE_READONLY bor ?wxTE_MULTILINE}]),
     {Frame, TxtCtrl}.
 
-update_sort_order(Col,State = #pro_wx_state{sort_order = {Sort,Dir}}) ->
+update_sort_order(Col, 
+		  #pro_wx_state{sort_order = {Sort,Dir}} = State) ->
     case map_sort_order(Col) of
 	Sort when Dir =:= incr -> State#pro_wx_state{sort_order = {Sort,decr}};
 	Sort when Dir =:= decr -> State#pro_wx_state{sort_order = {Sort,incr}};
@@ -340,6 +286,7 @@ map_sort_order(Col) ->
     case Col of
 	?COL_PID  -> #etop_proc_info.pid;
 	?COL_NAME -> #etop_proc_info.name;
+	?COL_TIME -> #etop_proc_info.runtime;
 	?COL_REDS -> #etop_proc_info.reds;
 	?COL_MEM  -> #etop_proc_info.mem;
 	?COL_MSG  -> #etop_proc_info.mq;
@@ -358,30 +305,6 @@ opt_warning(Pid, Reason) ->
     end.
 
 
-parse_options([H | T], Rec, Acc) ->
-    {Rec2, Acc2} =
-	case H of
-	    {send, Bool}         -> {Rec#trace_options{send = Bool}, Acc};
-	    {treceive, Bool}     -> {Rec#trace_options{treceive = Bool}, Acc};
-	    {functions, Bool}    -> {Rec#trace_options{functions = Bool}, Acc};
-	    {events, Bool}       -> {Rec#trace_options{events = Bool}, Acc};
-	    {on_1st_spawn, Bool} -> {Rec#trace_options{on_1st_spawn = Bool}, Acc};
-	    {on_all_spawn, Bool} -> {Rec#trace_options{on_all_spawn = Bool}, Acc};
-	    {on_1st_link, Bool}  -> {Rec#trace_options{on_1st_link = Bool}, Acc};
-	    {on_all_link, Bool}  -> {Rec#trace_options{on_all_link = Bool}, Acc};
-	    {ProcInfo, procinfo} -> {Rec, [ProcInfo | Acc]};
-
-	    Other ->
-		io:format("Not a valid option.\n~p\n", [Other]),
-		{Rec, Acc}
-	end,
-    parse_options(T, Rec2, Acc2);
-
-parse_options([], Rec, Acc) ->
-    {Rec, Acc};
-parse_options(_Other, _Rec, _Acc) ->
-    io:format("Default.\n", []),
-    {#trace_options{}, []} .
 
 to_str(Value) when is_atom(Value) ->
     atom_to_list(Value);
@@ -407,10 +330,9 @@ to_str(ShouldNotGetHere) ->
     erlang:error({?MODULE, to_str, ShouldNotGetHere}).
 
 update_propage(Config, State) ->
-    NewInfo = erltop:update(Config),
+    NewInfo = etop:update(Config),
     refresh(NewInfo, State),
     NewInfo.	
-
 
 get_selected_items(Grid) ->
     NrOfItems = wxListCtrl:getSelectedItemCount(Grid),
@@ -418,7 +340,6 @@ get_selected_items(Grid) ->
     [wxListCtrl:getItemText(Grid, X) || X <- IndexList].
     	
 get_selected_items(_, 0, _, ItemAcc) ->
-
     lists:reverse(ItemAcc);
 get_selected_items(Grid, NrOfItems, Index, ItemAcc) ->
     Item = wxListCtrl:getNextItem(
@@ -426,7 +347,6 @@ get_selected_items(Grid, NrOfItems, Index, ItemAcc) ->
     
     get_selected_items(Grid, NrOfItems-1, Item, [Item | ItemAcc]).
 	
-
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_info(time_to_update, {Config, _Info, State}) ->
@@ -475,9 +395,8 @@ handle_info({'EXIT', Pid, Reason}, {Config, Info, State}) ->
     end;
 
 handle_info({node, Node}, {Config, _Info, State}) ->
-    Config2 = Config#opts{node = Node},
+    Config2 = Config#opts{node = node},
     NewInfo = update_propage(Config2, State),
-    %%wxFrame:setTitle(State#state.frame, "etop: " ++ get_node_name(Config2)),
     {noreply, {Config2, NewInfo, State}};
 
 handle_info(Info, State) ->
@@ -485,8 +404,8 @@ handle_info(Info, State) ->
     {noreply, State}.
 
 terminate(Reason, _State) ->
+    etop:stop(),
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
-    erltop:stop(),
     ok.
 
 code_change(_, _, State) ->
@@ -504,12 +423,6 @@ handle_cast(Msg, State) ->
 
 %%%%%%%%%%%%%%%%%%%%LOOP%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_event(#wx{id = ?ID_SAVE_OPT, event = #wxCommand{type = command_menu_selected}}, 
-	     {Config, Info, #pro_wx_state{trace_options = Options} = State}) -> 
-    io:format("~p:~p, Klickade på save options~n", [?MODULE, ?LINE]),
-    File = save_options(Options, State#pro_wx_state.process_info),
-    State#pro_wx_state.parent ! {statusbar, "Options saved: " ++ File}, %%Fixa
-    {noreply, {Config, Info, State}};
 
 handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->  %%Fixa
     io:format("~p:~p, Klickade på dump to file~n", [?MODULE, ?LINE]),
@@ -522,7 +435,7 @@ handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->  %%Fixa
     end,
     {noreply, {Config, Info, State}};
 
-handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options = Options} = State}) -> %%Fixa
     io:format("~p:~p, Klickade options~n", [?MODULE, ?LINE]),
     io:format("Options_pid: ~p~n", [State#pro_wx_state.options_pid]),
     case State#pro_wx_state.options_pid of
@@ -569,7 +482,11 @@ handle_event(#wx{id = ?ID_VIEW} = Event, {Config, Info, State}) ->
     end,
     {noreply, {Config, Info, State}};
 
-handle_event(#wx{id = ?ID_PROC}, {#opts{node = Node} = Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+handle_event(#wx{id = ?ID_PROC}, 
+	     {#opts{node = Node} = Config,
+	      Info,
+	      #pro_wx_state{trace_options = Options} = State}) ->
+    
     case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
 	false ->
 	    Pid = erltop_process:start(State#pro_wx_state.selected,
@@ -577,16 +494,21 @@ handle_event(#wx{id = ?ID_PROC}, {#opts{node = Node} = Config, Info, #pro_wx_sta
 				       State#pro_wx_state.process_info,
 				       Node,
 				       self()),
-	    {noreply, {Config, Info, State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,
-								window = Pid} | State#pro_wx_state.opened]}}};
+	    {noreply, {Config, 
+		       Info, 
+		       State#pro_wx_state{opened = 
+					      [#pid{traced = State#pro_wx_state.selected,
+						    window = Pid} | State#pro_wx_state.opened]}}};
 	{value, _Tuple} ->
 	    io:format("Already open\n", []),
 	    {noreply, {Config, Info, State}}
     end;
- 
+
 handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_selected}}, 
-	     {#opts{node = Node} = Config, Info, 
-	      #pro_wx_state{trace_options = Options, grid = Grid,
+	     {#opts{node = Node} = Config,
+	      Info, 
+	      #pro_wx_state{trace_options = Options, 
+			    grid = Grid,
 			    tracemenu_opened = false, 
 			    frame = Frame} = State}) ->
     
@@ -599,7 +521,8 @@ handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_sele
     {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
 
 handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu_selected}},
-	     {#opts{node = Node} = Config, Info, 
+	     {#opts{node = Node} = Config,
+	      Info, 
 	      #pro_wx_state{trace_options = Options,
 			    tracemenu_opened = false,
 			    frame = Frame} = State}) ->
@@ -613,11 +536,12 @@ handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu
 
 
 handle_event(#wx{id = ?ID_TRACE_NEW_MENU, event = #wxCommand{type = command_menu_selected}},
-	     {#opts{node = Node} = Config, Info, 
+	     {#opts{node = Node} = Config,
+	      Info, 
 	      #pro_wx_state{trace_options = Options,
 			    tracemenu_opened = false,
 			    frame = Frame} = State}) ->
-
+    
     observer_trace_wx:start(Node,
 			    new,
 			    Options,
@@ -657,22 +581,25 @@ handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}}, {Co
     {noreply, {Config, Info, NewState}};
 
 handle_event(#wx{event = #wxList{type = command_list_item_activated}}, 
-	     {#opts{node = Node} = Config, Info, #pro_wx_state{trace_options = Options} = State}) ->
+	     {#opts{node = Node} = Config,
+	      Info, 
+	      #pro_wx_state{trace_options = Options} = State}) ->
     io:format("List item activated~n"),
-    %% case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
-    %% 	false ->
-    %% 	    Pid = erltop_process:start(State#pro_wx_state.selected,
-    %% 		   		       Options,
-    %% 		  		       State#pro_wx_state.process_info, %%bort
-    %% 		   		       Node,
-    %% 		   		       self()),
+    {noreply, {Config, Info,State}};
+%% case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
+%% 	false ->
+%% 	    Pid = erltop_process:start(State#pro_wx_state.selected,
+%% 		   		       Options,
+%% 		  		       State#pro_wx_state.process_info, %%bort
+%% 		   		       Node,
+%% 		   		       self()),
 
-    %% 	    {noreply, {Config, Info, State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,
-    %% 								window = Pid} | State#pro_wx_state.opened]}}};
-    %% 	{value, _Tuple} ->
-    %% 	    io:format("Already open\n", []),
-	    {noreply, {Config,Info,State}};
-    %% end;
+%% 	    {noreply, {Config, Info, State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,
+%% 								window = Pid} | State#pro_wx_state.opened]}}};
+%% 	{value, _Tuple} ->
+%% 	    io:format("Already open\n", []),
+%%{noreply, {ProcInfo,State}};
+%% end;
 
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
