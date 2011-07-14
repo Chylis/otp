@@ -713,12 +713,11 @@ handle_event(#wx{event = #wxCommand{type = command_checkbox_clicked}, userData =
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Functions
 
 handle_event(#wx{id = ?FUNCTIONPAGE_LISTBOX,
-		 obj = ListBox,
-		 event = #wxCommand{type = command_listbox_doubleclicked}},
+		 event = #wxCommand{type = command_listbox_doubleclicked,
+				    cmdString = ChosenModule}},
 	     #traceopts_state{frame = Frame, 
 			      traced_funcs = TracedDict,
 			      popup_open = false} = State) ->
-    ChosenModule = wxControlWithItems:getStringSelection(ListBox),
     {Dialog, CheckListBox, CheckedFuncs} = create_module_popup(Frame, ChosenModule, TracedDict),
     {noreply, State#traceopts_state{popup_open = true,
 				    module_popup_dialog = Dialog,
@@ -726,12 +725,10 @@ handle_event(#wx{id = ?FUNCTIONPAGE_LISTBOX,
 				    checked_funcs = CheckedFuncs}};
 
 handle_event(#wx{id = ?FUNCTIONPAGE_TXTCTRL,
-		 obj = TxtCtrl,
-		 event = #wxCommand{type = command_text_updated},
+		 event = #wxCommand{type = command_text_updated,
+				    cmdString = Input},
 		 userData = Data},
 	     #traceopts_state{functionpage_listbox = ListBox} = State) ->
-			      %% checked_funcs = CheckedFuncs} = State
-    Input = wxTextCtrl:getValue(TxtCtrl),
     filter_listbox_data(Input, Data, ListBox),
     {noreply, State};
 
@@ -761,13 +758,17 @@ handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Page - Match specs
 
+handle_event(#wx{event = #wxCommand{type = command_listbox_selected,
+				    cmdString = Txt}},
+	     State) when Txt =:= [] ->
+    {noreply, State};
+
 handle_event(#wx{id = ?MATCHPAGE_LISTBOX,
-		 obj = ListBox,
-		 event = #wxCommand{type = command_listbox_selected},
+		 event = #wxCommand{type = command_listbox_selected,
+				    cmdString = SavedTxt},
 		 userData = From},
 	     #traceopts_state{match_specs = MatchSpecs} = State) ->
     {StyledTxtCtrl, _} = get_correct_matchspec_components(From, State),
-    SavedTxt = wxControlWithItems:getStringSelection(ListBox),
     MsOrFun = find_and_format_ms(SavedTxt, MatchSpecs),
     wxStyledTextCtrl:setText(StyledTxtCtrl, MsOrFun),
     {noreply, State};
@@ -884,12 +885,12 @@ handle_event(#wx{id = ?wxID_APPLY,
 			      traced_funcs = TracedDict} = State) ->
     IntSelection = wxListBox:getSelection(ListBox),
     StrSelection = 
-	case IntSelection >= 0 of
-	    true ->
-		wxControlWithItems:getString(ListBox, IntSelection);
-	    false ->
-		[]
-	end,
+    	case IntSelection >= 0 of
+    	    true ->
+    		wxControlWithItems:getString(ListBox, IntSelection);
+    	    false ->
+    		[]
+    	end,
     {_, MS} = find_ms(StrSelection, MatchSpecs),
     RootId = wxTreeCtrl:getRootItem(Tree),
     ItemParent = wxTreeCtrl:getItemParent(Tree, Item),
@@ -1015,12 +1016,11 @@ handle_event(#wx{id = ?MODULEPOPUP_CHECKLISTBOX,
     {noreply, State#traceopts_state{checked_funcs = UpdCheckedFuncs}};
 
 handle_event(#wx{id = ?MODULEPOPUP_TXTCTRL,
-		 obj = TxtCtrl,
-		 event = #wxCommand{type = command_text_updated},
+		 event = #wxCommand{type = command_text_updated,
+				    cmdString = Input},
 		 userData = Data},
 	     #traceopts_state{module_popup_checklistbox = CListBox,
 			      checked_funcs = CheckedFuncs} = State) ->
-    Input = wxTextCtrl:getValue(TxtCtrl),
     FilteredData = filter_listbox_data(Input, Data, CListBox),
     lists:foreach(fun(Index) -> 
 			  wxCheckListBox:check(CListBox, Index, [{check, true}]) 

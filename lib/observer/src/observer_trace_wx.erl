@@ -9,8 +9,6 @@
 -include_lib("wx/include/wx.hrl").
 -include("erltop_defs.hrl").
 
-
-
 -define(OPTIONS, 1).
 -define(SAVE_BUFFER, 2).
 -define(CLOSE, 3).
