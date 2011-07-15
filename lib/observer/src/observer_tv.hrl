@@ -21,7 +21,14 @@
 	      size,
 	      owner,
 	      reg_name,
-	      readable = true,
+	      protection = public,
 	      type=set,
-	      keypos=1
+	      keypos=1,
+	      heir=none,
+	      memory=0,   %% In bytes
+	      compressed=false,
+	      fixed=false,
+	      %% Mnesia Info
+	      storage,
+	      index
 	     }).
