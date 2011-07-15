@@ -152,6 +152,8 @@ data_handler(Reader, Opts) ->
 	stop ->
 	    stop(Opts),
 	    ok;
+	{update, Pid} ->
+	    Pid ! update(Opts);
 	{config,{Key,Value}} ->
 	    data_handler(Reader,putopt(Key,Value,Opts));
 	{dump,Fd} ->

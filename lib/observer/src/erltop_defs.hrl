@@ -27,7 +27,7 @@
 	"        runq ~8w                        atom     ~8w    ets      ~8w~n").
 
 -record(opts, {node=node(), port = 8415, accum = false, intv = 5000, lines = 30, 
-	       width = 700, height = 340, sort = runtime, tracing = on,
+	       width = 700, height = 340, sort = runtime, tracing = off, %default tracing = on
 	       %% Other state information
 	       out_mod=erltop:output(graphical), out_proc, server, host, tracer, store, 
 	       accum_tab, remote}).

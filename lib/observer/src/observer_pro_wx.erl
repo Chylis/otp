@@ -62,6 +62,11 @@
 %% Records
 -record(pid, {window, traced}).
 
+-record(holder, {node,
+		 parent,
+		 columns,
+		 info}).
+
 -record(trace_options, {send         = false,
 			treceive     = false,
 			functions    = false,
@@ -100,7 +105,7 @@
 		       tracemenu_opened,
 		       nodes,
 		       sort_order = {#etop_proc_info.reds, decr},
-		       accum_tab}).
+		       holder}).
 
 start_link(Notebook, Parent) ->
     wx_object:start_link(?MODULE, [Notebook, Parent], []).
@@ -110,18 +115,22 @@ start_link(Notebook, Parent) ->
 init([Notebook, Parent]) ->
     process_flag(trap_exit, true),
     Config = etop:start(self()),
-    {ProPanel, State} = setup(Notebook, Parent),
     Info = etop:update(Config),
-    io:format("1"),
+    io:format("~n~p~n", [Info]),
+    Holder = spawn_link(fun() ->
+				init_table_holder(node(), self(),
+						  7, Info#etop_info.procinfo) %%hårdkodad 7a
+			end),
+    {ProPanel, State} = setup(Notebook, Parent, Holder),
     refresh(Info, State),
-    io:format("2"),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {ProPanel, {Config, Info, State}}.
 
-setup(Notebook, Parent) ->
+setup(Notebook, Parent, Holder) ->
     ProPanel = wxPanel:new(Notebook, []),
     Menu = create_popup_menu(),
-    Grid = create_list_box(ProPanel),
+
+    Grid = create_list_box(ProPanel, Holder),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
     wxSizer:add(Sizer, Grid, [{flag, ?wxEXPAND bor ?wxALL},
 			      {proportion, 1},
@@ -181,15 +190,15 @@ create_popup_menu() ->
     PopupMenu.
 
 
-create_list_box(Panel) ->
-    Style = ?wxLC_REPORT bor ?wxLC_HRULES,% bor ?wxLC_VIRTUAL,
-    ListCtrl = wxListCtrl:new(Panel, [{style, Style}]),
-				      %% {onGetItemText,
-				      %%  fun(_, Item, Col) -> ok end},
-				      %% {onGetItemAttr,
-				      %%  fun(_, Item) -> ok end}
-				      %% ]),
-				      %% %{size    , {600, 500}}]),
+create_list_box(Panel, Holder) ->
+    Style = ?wxLC_REPORT bor ?wxLC_HRULES bor ?wxLC_VIRTUAL,
+    ListCtrl = wxListCtrl:new(Panel, [{style, Style},
+				      {onGetItemText,
+				       fun(_, Item, Col) -> get_row(Holder, Item, Col) end},
+				      {onGetItemAttr,
+				       fun(_, Item) -> "ItemAttr" end}
+				     ]),
+    %%{size    , {600, 500}}]),
     Li = wxListItem:new(),
     AddListEntry = fun({Name, Align, DefSize}, Col) ->
     			   wxListItem:setText(Li, Name),
@@ -214,6 +223,7 @@ create_list_box(Panel) ->
     wxListCtrl:connect(ListCtrl, command_list_item_right_click),
     wxListCtrl:connect(ListCtrl, command_list_col_click),
     wxListCtrl:connect(ListCtrl, command_list_item_selected),
+    wxListCtrl:setItemCount(ListCtrl, 1),
     ListCtrl.
 
 refresh(Info,#pro_wx_state{grid = Grid, sort_order = Sort}) ->
@@ -609,3 +619,67 @@ handle_event(Event, State) ->
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+get_row(Holder, Item, Column) ->
+    io:format("get_row/3~n"),
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_row, self(), Item, Column},
+    receive
+	{'DOWN', Ref, _, _, _} -> "";
+	{Holder, Res} ->
+	    erlang:demonitor(Ref),
+	    Res
+    end.
+
+
+
+init_table_holder(Node, Parent, Cols, Info) ->
+    table_holder(#holder{node=Node, parent=Parent,
+			 columns=Cols, info = Info}).
+
+table_holder(#holder{parent=Parent, info = Info} = S0) ->
+    receive
+	{get_row, From, Row, Col} ->
+	    io:format("Received {getrow...~n"),
+	    get_row(From, Row, Col, Info),
+	    table_holder(S0);
+	What ->
+	    io:format("Table holder got ~p~n",[What]),
+	    table_holder(S0)
+    end.
+
+
+get_row(From, Row, Col, Info) ->
+    io:format("get_row/4~n"),
+    case element(Col, lists:nth(Row+1, Info)) of
+	I ->
+	    io:format("I: ~p~n", [I]),
+	    From ! {self(), io_lib:format("~w", [I])};
+    	[Object|_] when Col =:= all ->
+    	    From ! {self(), io_lib:format("~w", [Object])};
+    	[Object|_] when tuple_size(Object) >= Col ->
+    	    From ! {self(), io_lib:format("~w", [element(Col, Object)])};
+    	_ ->
+    	    From ! {self(), ""}
+    end.

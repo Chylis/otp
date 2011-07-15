@@ -20,9 +20,9 @@
 -module(erltop).
 -author('siri@erix.ericsson.se').
 
--export([start/1, start/2, config/2, stop/0, dump/1, help/0]).
+-export([start/1, start/2, config/2, stop/0, help/0]).
 %% Internal
--export([update/1,output/1, init_data_handler/1]).
+-export([update/1,output/1, data_handler/1]).
 -export([loadinfo/1, meminfo/2, getopt/2, dbgout/2]).
 
 -include("erltop.hrl").
@@ -61,12 +61,6 @@ help() ->
       "                         This is not an etop parameter~n"
      ).
 
-stop() ->
-    case whereis(etop_server) of
-	undefined -> not_started;
-	Pid when is_pid(Pid) -> etop_server ! stop
-    end.
-
 config(Key,Value) ->
     case check_runtime_config(Key,Value) of
 	ok ->
@@ -84,133 +78,62 @@ check_runtime_config(sort,S) when S=:=runtime;
 check_runtime_config(accumulate,A) when A=:=true; A=:=false -> ok;
 check_runtime_config(_Key,_Value) -> error.
 
-dump(File) ->
-    case file:open(File,[write]) of
-	{ok,Fd} -> etop_server ! {dump,Fd};
-	Error -> Error
-    end.
 
 start(WxPid) ->
     start(WxPid, []).
     
 start(WxPid, Opts) ->
-    %process_flag(trap_exit, true),
     Config1 = handle_args(init:get_arguments() ++ Opts, #opts{}),
     Config2 = Config1#opts{server=self()},
+    io:format("Config = ~p ~n", [Config2]),
     dbgout("Config = ~p ~n", [Config2]),
 
-    %% Connect to the node we want to look at
-    Node = getopt(node, Config2),
-    case net_adm:ping(Node) of
-	pang when Node /= node() ->
-	    io:format("Error Couldn't connect to node ~p ~n~n", [Node]),
-	    help(),
-	    exit("connection error");
-	_pong ->
-	    check_runtime_tools_vsn(Node)
-    end,
-
-    %% Maybe set up the tracing
-    Config3 = 
-	if Config2#opts.tracing == on, Node /= node() ->
-		%% Cannot trace on current node since the tracer will
-		%% trace itself
-		erltop_tr:setup_tracer(Config2);
-	   true -> 
-		if Config2#opts.sort == runtime -> 
-			Config2#opts{sort=reductions,tracing=off};
-		   true -> 
-			Config2#opts{tracing=off}
-		end
-	end,
     AccumTab = ets:new(accum_tab,
 		       [set,public,{keypos,#etop_proc_info.pid}]),
-    Config4 = Config3#opts{accum_tab=AccumTab},
 
-    %% Start the output server
-    
+    Config3 = Config2#opts{accum_tab=AccumTab},
+
+    %% Link the output server
     link(WxPid),
-    Out = WxPid,
-    
-%    Out = spawn_link(Config4#opts.out_mod, init, [Config4]),
-    Config5 = Config4#opts{out_proc = Out},       
-    
-
-    dbgout("Config = ~p ~n", [Config5]),
-    EtopServerPid = spawn_link(?MODULE, init_data_handler, [Config5]),
+    Config4 = Config3#opts{out_proc = WxPid},       
+    dbgout("Config = ~p ~n", [Config4]),
+    io:format("Config4 = ~p ~n", [Config4]),
+    EtopServerPid = spawn_link(?MODULE, data_handler, [Config4]),
     register(etop_server, EtopServerPid),    
-    Config5.
-
-check_runtime_tools_vsn(Node) ->
-    case rpc:call(Node,observer_backend,vsn,[]) of
-	{ok,Vsn} -> check_vsn(Vsn);
-        _ -> exit("Faulty version of runtime_tools on remote node")
-    end.
-check_vsn(_Vsn) -> ok.
-%check_vsn(_Vsn) -> exit("Faulty version of runtime_tools on remote node").
-    
+    Config4.
 
 %% Handle the incoming data
 
-init_data_handler(Config) ->
-    Reader = 
-	if Config#opts.tracing == on -> erltop_tr:reader(Config);
-	   true -> undefined
-	end,
-    data_handler(Reader, Config).
 
-data_handler(Reader, Opts) ->
+data_handler(Opts) ->
     receive
 	stop ->
-	    stop(Opts),
+	    stop(),
 	    ok;
 	{config,{Key,Value}} ->
-	    data_handler(Reader,putopt(Key,Value,Opts));
-	{dump,Fd} ->
-	    Opts#opts.out_proc ! {dump,Fd},
-	    data_handler(Reader,Opts);
-	{'EXIT', EPid, Reason} when EPid == Opts#opts.out_proc ->
-	    case Reason of
-		normal -> ok;
-		_ -> io:format("Output server crashed: ~p~n",[Reason])
-	    end,
-	    stop(Opts),
-	    out_proc_stopped;
+	    data_handler(putopt(Key,Value,Opts));
 	{'EXIT', Reader, eof} ->
 	    io:format("Lost connection to node ~p exiting~n", [Opts#opts.node]),
-	    stop(Opts),
+	    stop(),
 	    connection_lost;
 	M ->
 	    dbgout("~p GOT MSG ~p ~n", [etop_server, M]),
-	    data_handler(Reader, Opts)
+	    data_handler(Opts)
     end.
 
-stop(Opts) ->
-    %(Opts#opts.out_mod):stop(Opts#opts.out_proc),
-    if Opts#opts.tracing == on -> erltop_tr:stop_tracer(Opts);
-       true -> ok
-    end,
+stop() ->
     unregister(etop_server).
     
-update(#opts{store=Store,node=Node,tracing=Tracing}=Opts) ->
+update(#opts{node=Node}=Opts) ->
     Pid = spawn_link(Node,observer_backend,etop_collect,[self()]),
-    Info = receive {Pid,I} -> I 
-	   after 1000 -> exit(connection_lost)
+    Info = receive 
+	       {Pid,I} -> 
+		   I 
+	   after 1000 -> 
+		   exit(connection_lost)
 	   end,
     #etop_info{procinfo=ProcInfo} = Info,
-    ProcInfo1 = 
-	if Tracing == on ->
-		PI=lists:map(fun(PI=#etop_proc_info{pid=P}) -> 
-				     case ets:lookup(Store,P) of
-					 [{P,T}] -> PI#etop_proc_info{runtime=T};
-					 [] -> PI
-				     end
-			     end,
-			     ProcInfo),
-		PI;	   
-	   true -> 
-		lists:map(fun(PI) -> PI#etop_proc_info{runtime='-'} end,ProcInfo)
-	end,
+    ProcInfo1 = lists:map(fun(PI) -> PI#etop_proc_info{runtime='-'} end,ProcInfo),
     ProcInfo2 = sort(Opts,ProcInfo1),
     Info#etop_info{procinfo=ProcInfo2}.    
 
@@ -241,7 +164,6 @@ sort(Opts,PI) ->
 		    PI)
 	  end,
     _PI2 = lists:reverse(lists:keysort(Tag,PI1)).
-%%    lists:sublist(_PI2,Opts#opts.lines).
 
 get_tag(runtime) -> #etop_proc_info.runtime;
 get_tag(memory) -> #etop_proc_info.mem;
