@@ -35,11 +35,11 @@
 
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
--define(COL_TIME, 2).
--define(COL_REDS, 3).
--define(COL_MEM,  4).
--define(COL_MSG,  5).
--define(COL_FUN,  6).
+-define(COL_MEM, 2).
+-define(COL_TIME,  3).
+-define(COL_REDS, 4).
+-define(COL_FUN,  5).
+-define(COL_MSG,  6).
 
 -define(ID_KILL, 200).
 -define(ID_VIEW, 201).
@@ -61,11 +61,11 @@
 
 %% Records
 -record(pid, {window, traced}).
-
--record(holder, {node,
-		 parent,
-		 columns,
-		 info}).
+-record(attrs, {even, odd, deleted, changed, searched}).
+-record(holder, {parent,
+		 procinfo,
+		 attrs,
+		 sort_order}).
 
 -record(trace_options, {send         = false,
 			treceive     = false,
@@ -76,13 +76,6 @@
 			on_1st_link  = false,
 			on_all_link  = false,
 			main_window  = true}).
-
--record(opts, {node=node(), port = 8415, accum = false, intv = 5000, lines = 30, 
-	       width = 700, height = 340, sort = runtime, tracing = on,
-	       %% Other state information
-	       out_mod=etop:output(graphical), out_proc, server, host, tracer, store, 
-	       accum_tab, remote}).
-
 
 -record(pro_wx_state, {parent,
 		       code_frame,
@@ -97,13 +90,14 @@
 		       trace_options = #trace_options{},
 		       options_pid,
 		       opened = [],
-		       process_info,
+		       process_info_settings,
 		       interval,
 		       hide_system,
 		       hide_modules,
 		       hide_pids,
 		       tracemenu_opened,
 		       nodes,
+		       node = node(),
 		       sort_order = {#etop_proc_info.reds, decr},
 		       holder}).
 
@@ -116,21 +110,27 @@ init([Notebook, Parent]) ->
     process_flag(trap_exit, true),
     Config = etop:start(self()),
     Info = etop:update(Config),
-    io:format("~n~p~n", [Info]),
+    Attrs = create_attrs(),
+    Self = self(),
+    SortOrder = {?COL_REDS, decr},
     Holder = spawn_link(fun() ->
-				init_table_holder(node(), self(),
-						  7, Info#etop_info.procinfo) %%hårdkodad 7a
+				init_table_holder(Self, 
+						  Info#etop_info.procinfo, 
+						  Attrs,
+						  SortOrder
+						 )
 			end),
-    {ProPanel, State} = setup(Notebook, Parent, Holder),
-    refresh(Info, State),
+    Count = length(Info#etop_info.procinfo),
+    {ProPanel, State} = setup(Notebook, Parent, Holder, Count),
+    refresh_grid(Holder),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
-    {ProPanel, {Config, Info, State}}.
+    {ProPanel, State}.
 
-setup(Notebook, Parent, Holder) ->
+setup(Notebook, Parent, Holder, Count) ->
     ProPanel = wxPanel:new(Notebook, []),
     Menu = create_popup_menu(),
 
-    Grid = create_list_box(ProPanel, Holder),
+    Grid = create_list_box(ProPanel, Holder, Count),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
     wxSizer:add(Sizer, Grid, [{flag, ?wxEXPAND bor ?wxALL},
 			      {proportion, 1},
@@ -138,7 +138,7 @@ setup(Notebook, Parent, Holder) ->
     
     wxWindow:setSizer(ProPanel, Sizer),
     
-    Interval = 50000, %erltop:getopt(intv, Config),
+    Interval = 5000, %erltop:getopt(intv, Config),
     
     ProcessInfo = [ % sorted
 		    error_handler,
@@ -155,10 +155,11 @@ setup(Notebook, Parent, Holder) ->
 			   grid        = Grid,
 			   frame       = ProPanel,
 			   parent_notebook = Notebook,
-			   process_info = ProcessInfo,
+			   process_info_settings = ProcessInfo,
 			   interval = Interval,
 			   tracemenu_opened = false,
-			   nodes = [node() | nodes()]}, %temporary nodes...!
+			   nodes = [node() | nodes()],%temporary nodes...!
+			   holder = Holder}, 
     {ProPanel, State}.
 %% UI-creation
 
@@ -190,13 +191,13 @@ create_popup_menu() ->
     PopupMenu.
 
 
-create_list_box(Panel, Holder) ->
-    Style = ?wxLC_REPORT bor ?wxLC_HRULES bor ?wxLC_VIRTUAL,
+create_list_box(Panel, Holder, Count) ->
+    Style = ?wxLC_REPORT bor ?wxLC_VIRTUAL,
     ListCtrl = wxListCtrl:new(Panel, [{style, Style},
 				      {onGetItemText,
 				       fun(_, Item, Col) -> get_row(Holder, Item, Col) end},
 				      {onGetItemAttr,
-				       fun(_, Item) -> "ItemAttr" end}
+				       fun(_, Item) -> get_attr(Holder, Item) end}
 				     ]),
     %%{size    , {600, 500}}]),
     Li = wxListItem:new(),
@@ -209,12 +210,12 @@ create_list_box(Panel, Holder) ->
     		   end,
     ListItems = [{"Pid", ?wxLIST_FORMAT_CENTRE,  120},
     		 {"Name or initial fun", ?wxLIST_FORMAT_LEFT, 200},
+		 {"Memory", ?wxLIST_FORMAT_LEFT, 50},
 		 {"Time", ?wxLIST_FORMAT_CENTRE, 50},
 		 {"Reds", ?wxLIST_FORMAT_CENTRE, 50},
-    		 {"Memory", ?wxLIST_FORMAT_LEFT, 50},
-    		 {"Msgs",  ?wxLIST_FORMAT_LEFT, 50},
-    		 {"Current function", ?wxLIST_FORMAT_LEFT,  200}
-    		],
+		 {"Current function", ?wxLIST_FORMAT_LEFT,  200},
+		 {"Msgs",  ?wxLIST_FORMAT_LEFT, 50}
+		],
     lists:foldl(AddListEntry, 0, ListItems),
     wxListItem:destroy(Li),
     
@@ -223,42 +224,17 @@ create_list_box(Panel, Holder) ->
     wxListCtrl:connect(ListCtrl, command_list_item_right_click),
     wxListCtrl:connect(ListCtrl, command_list_col_click),
     wxListCtrl:connect(ListCtrl, command_list_item_selected),
-    wxListCtrl:setItemCount(ListCtrl, 1),
+    wxListCtrl:setItemCount(ListCtrl, Count),
     ListCtrl.
 
-refresh(Info,#pro_wx_state{grid = Grid, sort_order = Sort}) ->
-    wx:batch(fun() -> update_grid(Grid, Sort, Info#etop_info.procinfo) end).
 
-
-update_grid(Grid, {Sort,Dir}, ProcInfo0) ->
-    wxListCtrl:deleteAllItems(Grid),
+change_node(Node) ->
+    etop_server ! {config, {node, Node}}.
     
-    Update =
-	fun(#etop_proc_info{pid = Pid, mem = Mem, reds = Reds,
-			    name = Name, runtime = RunTime, cf = CF,mq = MQ}, 
-	    Row) ->
-		wxListCtrl:insertItem(Grid, Row, ""),
-		if (Row rem 2) =:= 0 ->
-			wxListCtrl:setItemBackgroundColour(Grid, Row, {240,240,255});
-		   true -> ignore
-		end,
-		lists:foreach(fun({Col, Val}) -> 
-				      wxListCtrl:setItem(Grid, Row, Col, to_str(Val))
-			      end,
-			      [{?COL_PID,Pid},  {?COL_NAME,Name}, {?COL_TIME,RunTime},
-			       {?COL_REDS,Reds},{?COL_MEM,Mem},
-			       {?COL_MSG, MQ},  {?COL_FUN,CF}
-			      ]),
-		Row + 1
-	end,
-    ProcInfo = case Dir of 
-		   decr -> lists:reverse(lists:keysort(Sort, ProcInfo0));
-		   incr -> lists:keysort(Sort, ProcInfo0)
-	       end,
-    wx:foldl(Update, 0, ProcInfo),
-    ok.
+refresh_grid(Holder) ->
+    etop_server ! {update, Holder}.
 
-lookup_pid(#etop_info{procinfo = ProcInfo}, Pid) ->
+lookup_pid(ProcInfo, Pid) ->
     [Ret] = lists:filter(fun(#etop_proc_info{pid = Pid2}) ->
 				 Pid =:= Pid2
 			 end,
@@ -338,76 +314,76 @@ to_str(No) when is_integer(No) ->
     integer_to_list(No);
 to_str(ShouldNotGetHere) ->
     erlang:error({?MODULE, to_str, ShouldNotGetHere}).
-
-update_propage(Config, State) ->
-    NewInfo = etop:update(Config),
-    refresh(NewInfo, State),
-    NewInfo.	
-
-get_selected_items(Grid) ->
-    NrOfItems = wxListCtrl:getSelectedItemCount(Grid),
-    IndexList = get_selected_items(Grid, NrOfItems, -1, []),
-    [wxListCtrl:getItemText(Grid, X) || X <- IndexList].
-    	
-get_selected_items(_, 0, _, ItemAcc) ->
-    lists:reverse(ItemAcc);
-get_selected_items(Grid, NrOfItems, Index, ItemAcc) ->
-    Item = wxListCtrl:getNextItem(
-	     Grid, Index, [{geometry, ?wxLIST_NEXT_ALL}, {state, ?wxLIST_STATE_SELECTED}]),
     
-    get_selected_items(Grid, NrOfItems-1, Item, [Item | ItemAcc]).
-	
+get_selected_items(Grid) ->
+    get_selected_items(Grid, -1, []).
+    
+get_selected_items(Grid, Index, ItemAcc) ->
+    Item = wxListCtrl:getNextItem(Grid, Index, 
+				  [{geometry, ?wxLIST_NEXT_ALL}, {state, ?wxLIST_STATE_SELECTED}]),
+    case Item of
+	-1 ->
+	    lists:reverse(ItemAcc);
+	_ ->
+	    get_selected_items(Grid, Item, [Item+1 | ItemAcc])
+    end.
+
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_info(time_to_update, {Config, _Info, State}) ->
-    NewInfo = update_propage(Config, State),
+handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
+    wxListCtrl:setItemCount(Grid, Count),
+    wxListCtrl:refreshItems(Grid, 0, wxListCtrl:getItemCount(Grid)),
+    {noreply, State};
+
+handle_info(time_to_update, #pro_wx_state{holder = Holder} = State) ->
+    refresh_grid(Holder),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
-    {noreply, {Config, NewInfo, State}};
+    {noreply, State};
 
-handle_info({updated_traceopt, TraceOpts}, {Config, Info, State}) -> %When user updates traceoptions from tracemenu..
+handle_info({updated_traceopt, TraceOpts}, State) -> %When user updates traceoptions from tracemenu..
     State2 = State#pro_wx_state{trace_options = TraceOpts},
-    {noreply, {Config, Info, State2}};
+    {noreply, State2};
 
-handle_info(tracemenu_closed, {Config, Info, State}) -> %When tracemenu terminates..
+handle_info(tracemenu_closed, State) -> %When tracemenu terminates..
     State2 = State#pro_wx_state{tracemenu_opened = false},
-    {noreply, {Config, Info, State2}};
+    {noreply, State2};
 
-handle_info({checked, Opt, ProcessInfo, Interval}, {Config, Info, State}) -> %från opts
+handle_info({checked, Opt, ProcessInfo, Interval}, State) -> %från opts
     State2 = State#pro_wx_state{trace_options = Opt,
-				process_info  = ProcessInfo,
+				process_info_settings  = ProcessInfo,
 				interval = Interval},
-    {noreply, {Config, Info, State2}};
+    {noreply, State2};
 
-handle_info({save, File}, {Config, Info, State}) -> %från options
+handle_info({save, File}, State) -> %från options
     State#pro_wx_state.parent ! {statusbar, "Options saved: " ++ File},
-    {noreply, {Config, Info, State}};
+    {noreply, State};
 
-handle_info({active, Node}, {Config, _Info, State}) ->
-    create_pro_menu(State#pro_wx_state.parent),
-    NewInfo = update_propage(Config, State),
-    {noreply, {Config, NewInfo, State}};
+handle_info({active, Node}, #pro_wx_state{holder = Holder,
+						    parent = Parent} = State) ->
+    create_pro_menu(Parent),
+    change_node(Node),
+    refresh_grid(Holder),
+    {noreply, State};
 
-handle_info({config, _Changed, NewConfig}, {_Config, Info, State}) ->
-    {noreply, {NewConfig, Info, State}};
-
-handle_info({'EXIT', Pid, Reason}, {Config, Info, State}) when Pid =:= State#pro_wx_state.options_pid ->
+handle_info({'EXIT', Pid, Reason}, State) when Pid =:= State#pro_wx_state.options_pid ->
     opt_warning(Pid, Reason),
-    {noreply, {Config, Info, State#pro_wx_state{options_pid = undefined}}};
+    {noreply, State#pro_wx_state{options_pid = undefined}};
 
-handle_info({'EXIT', Pid, Reason}, {Config, Info, State}) ->
+handle_info({'EXIT', Pid, Reason}, State) ->
     opt_warning(Pid, Reason),
     case lists:keysearch(Pid, #pid.window, State#pro_wx_state.opened) of
 	{value, Tuple} ->
 	    Opened = lists:delete(Tuple, State#pro_wx_state.opened),
-	    {noreply, {Config, Info, State#pro_wx_state{opened = Opened}}};
+	    {noreply, State#pro_wx_state{opened = Opened}};
 	false ->
-	    {noreply, {Config, Info, State}}
+	    {noreply, State}
     end;
 
-handle_info({node, Node}, {Config, _Info, State}) ->
-    Config2 = Config#opts{node = node},
-    NewInfo = update_propage(Config2, State),
-    {noreply, {Config2, NewInfo, State}};
+handle_info({node, Node}, #pro_wx_state{holder = Holder} = State) ->
+    State2 = State#pro_wx_state{node = Node},
+    change_node(Node),
+    refresh_grid(Holder),
+    {noreply, State2};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -434,7 +410,7 @@ handle_cast(Msg, State) ->
 %%%%%%%%%%%%%%%%%%%%LOOP%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
-handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->  %%Fixa
+handle_event(#wx{id = ?ID_DUMP_TO_FILE}, State) ->  %%Fixa
     io:format("~p:~p, Klickade på dump to file~n", [?MODULE, ?LINE]),
     FD  =  wxFileDialog:new(State#pro_wx_state.frame, [{style,?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
     case wxFileDialog:showModal(FD) of
@@ -443,44 +419,53 @@ handle_event(#wx{id = ?ID_DUMP_TO_FILE}, {Config, Info, State}) ->  %%Fixa
 	    io:format("It should Dump to file ~p~n", [Path]);
 	_ -> ok
     end,
-    {noreply, {Config, Info, State}};
+    {noreply, State};
 
-handle_event(#wx{id = ?ID_OPTIONS}, {Config, Info, #pro_wx_state{trace_options = Options} = State}) -> %%Fixa
+handle_event(#wx{id = ?ID_OPTIONS}, #pro_wx_state{trace_options = Options} = State) -> %%Fixa
     io:format("~p:~p, Klickade options~n", [?MODULE, ?LINE]),
     io:format("Options_pid: ~p~n", [State#pro_wx_state.options_pid]),
     case State#pro_wx_state.options_pid of
 	undefined ->
 	    Pid = erltop_options:start(Options,
-				       State#pro_wx_state.process_info,
+				       State#pro_wx_state.process_info_settings,
 				       State#pro_wx_state.interval,
 				       self()),
 	    io:format("Options: ~p~n, Process_info: ~p~n, Interval: ~p~n",
-		      [Options, State#pro_wx_state.process_info, State#pro_wx_state.interval]),
-	    {noreply, {Config, Info, State#pro_wx_state{options_pid = Pid}}};
+		      [Options, State#pro_wx_state.process_info_settings, State#pro_wx_state.interval]),
+	    {noreply, State#pro_wx_state{options_pid = Pid}};
 	_ ->
-	    {noreply, {Config, Info, State}}
+	    {noreply, State}
     end;
 
-handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, {Config, _Info, State}) ->
+handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
+	     #pro_wx_state{holder = Holder} = State) ->
     io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
-    NewInfo = update_propage(Config, State),
-    {noreply, {Config, NewInfo, State}};
+    refresh_grid(Holder),
+    {noreply, State};
 
-handle_event(#wx{id = ?ID_KILL}, {Config, Info, State}) ->
-    case State#pro_wx_state.selected of
+handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{selected = Sel} = State) ->
+    case Sel of
 	undefined -> ignore;
  	_ -> exit(State#pro_wx_state.selected, kill)
-     end,
-    {noreply, {Config, Info, State}};
+    end,
+    {noreply, State};
 
 handle_event(#wx{id = ?ID_MODULE_INFO, 
-		 event = #wxCommand{type = command_menu_selected}}, {Config, Info, State})  ->
-    erltop_process:module_info_window(Config#opts.node, State#pro_wx_state.selected), %%%%%%% erltop process byt namn
-    {noreply, {Config, Info, State}};
+		 event = #wxCommand{type = command_menu_selected}}, 
+	     #pro_wx_state{node = Node, selected = Sel} = State)  ->
+    erltop_process:module_info_window(Node, Sel), %%%%%%% erltop process byt namn
+    {noreply, State};
 
-handle_event(#wx{id = ?ID_VIEW} = Event, {Config, Info, State}) ->
+handle_event(#wx{id = ?ID_VIEW} = Event,
+	     #pro_wx_state{holder = Holder,
+			   selected = Sel} = State) ->
+    Holder ! {get_info, self()},
+    Info = receive
+	       I ->
+		   I
+	   end,
     io:format("Event: ~p~n", [Event]),
-    #etop_proc_info{cf = {M,_,_}} = lookup_pid(Info, State#pro_wx_state.selected),
+    #etop_proc_info{cf = {M,_,_}} = lookup_pid(Info, Sel),
     case module_code(M) of
 	no_code ->     ok;
 	{src, File} ->
@@ -490,77 +475,74 @@ handle_event(#wx{id = ?ID_VIEW} = Event, {Config, Info, State}) ->
 	    wxFrame:setTitle(CodeFrame, "Viewing: " ++ FileName),
 	    wxFrame:show(CodeFrame)
     end,
-    {noreply, {Config, Info, State}};
+    {noreply, State};
 
 handle_event(#wx{id = ?ID_PROC}, 
-	     {#opts{node = Node} = Config,
-	      Info,
-	      #pro_wx_state{trace_options = Options} = State}) ->
+	     #pro_wx_state{node = Node,
+			   opened = Opened,
+			   selected = Sel,
+			   process_info_settings = PI,
+			   trace_options = Opts} = State) ->
     
-    case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
+    case lists:keysearch(Sel, #pid.traced, Opened) of
 	false ->
-	    Pid = erltop_process:start(State#pro_wx_state.selected,
-				       Options,
-				       State#pro_wx_state.process_info,
-				       Node,
+	    Pid = erltop_process:start(Sel, Opts,
+				       PI, Node,
 				       self()),
-	    {noreply, {Config, 
-		       Info, 
-		       State#pro_wx_state{opened = 
-					      [#pid{traced = State#pro_wx_state.selected,
-						    window = Pid} | State#pro_wx_state.opened]}}};
+	    {noreply, 
+	     State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,window = Pid} 
+					  | State#pro_wx_state.opened]}};
 	{value, _Tuple} ->
 	    io:format("Already open\n", []),
-	    {noreply, {Config, Info, State}}
+	    {noreply, State}
     end;
 
 handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_selected}}, 
-	     {#opts{node = Node} = Config,
-	      Info, 
-	      #pro_wx_state{trace_options = Options, 
-			    grid = Grid,
-			    tracemenu_opened = false, 
-			    frame = Frame} = State}) ->
-    
-    PidList = get_selected_items(Grid),
+	     #pro_wx_state{node = Node,
+			   trace_options = Options,
+			   holder = Holder,
+			   grid = Grid,
+			   tracemenu_opened = false, 
+			   frame = Frame} = State) ->
+    IndexList = get_selected_items(Grid),
+    PidList = get_selected_pids(Holder, IndexList),
     observer_trace_wx:start(Node,
-			    PidList,
-			    Options,
-			    Frame,
-			    self()),
-    {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
+     			    PidList,
+     			    Options,
+     			    Frame,
+     			    self()),
+    {noreply,  State#pro_wx_state{tracemenu_opened = true}};
 
 handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu_selected}},
-	     {#opts{node = Node} = Config,
-	      Info, 
-	      #pro_wx_state{trace_options = Options,
-			    tracemenu_opened = false,
-			    frame = Frame} = State}) ->
-    
-    observer_trace_wx:start(Node,
+	     #pro_wx_state{node = Node,
+			   trace_options = Options,
+			   tracemenu_opened = false,
+			   frame = Frame} = State) ->
+
+        observer_trace_wx:start(Node,
 			    all,
 			    Options,
 			    Frame,
 			    self()),
-    {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
+    {noreply, State#pro_wx_state{tracemenu_opened = true}};
 
 
 handle_event(#wx{id = ?ID_TRACE_NEW_MENU, event = #wxCommand{type = command_menu_selected}},
-	     {#opts{node = Node} = Config,
-	      Info, 
-	      #pro_wx_state{trace_options = Options,
-			    tracemenu_opened = false,
-			    frame = Frame} = State}) ->
+	     #pro_wx_state{node = Node,
+			   trace_options = Options,
+			   tracemenu_opened = false,
+			   frame = Frame} = State) ->
     
     observer_trace_wx:start(Node,
 			    new,
 			    Options,
 			    Frame,
 			    self()),
-    {noreply,  {Config, Info, State#pro_wx_state{tracemenu_opened = true}}};
+    {noreply,  State#pro_wx_state{tracemenu_opened = true}};
 
 
-handle_event(#wx{event=#wxSize{size={W,_}}}, {Config, Info, #pro_wx_state{grid=Grid} = State}) ->
+handle_event(#wx{event=#wxSize{size={W,_}}}, 
+	     #pro_wx_state{grid=Grid} = State) ->
     wx:batch(fun() ->
 		     Cols = wxListCtrl:getColumnCount(Grid),
 		     Last = lists:foldl(fun(I, Last) ->
@@ -569,38 +551,43 @@ handle_event(#wx{event=#wxSize{size={W,_}}}, {Config, Info, #pro_wx_state{grid=G
 		     Size = max(200, Last),
 		     wxListCtrl:setColumnWidth(Grid, Cols-1, Size)
 	     end),
-    {noreply, {Config, Info, State}};
+    {noreply, State};
 
-handle_event(#wx{event = #wxList{type = command_list_item_right_click, 
-				 itemIndex = Row}}, {Config, Info, State}) -> %Row selected
-    #pro_wx_state{grid = Grid, popup_menu = PopupMenu} = State,
-    Pid = wxListCtrl:getItemText(Grid, Row),
-    wxWindow:popupMenu(Grid, PopupMenu, []),
-    {noreply, {Config, Info, State#pro_wx_state{selected = list_to_pid(Pid)}}};
+%% handle_event(#wx{event = #wxList{type = command_list_item_right_click, 
+%% 				 itemIndex = Row}}, 
+%% 	     #pro_wx_state{grid = Grid,
+%% 			   popup_menu = PopupMenu} = State) -> %Row selected
+%%     Pid = wxListCtrl:getItemText(Grid, Row),
+%%     wxWindow:popupMenu(Grid, PopupMenu, []),
+%%     {noreply, State#pro_wx_state{selected = list_to_pid(Pid)}};
 
-handle_event(#wx{event = #wxList{type = command_list_item_selected, 
+handle_event(#wx{event = #wxList{type = command_list_item_selected,
 				 itemIndex = Row}}, 
-	     {Config, Info, #pro_wx_state{grid = Grid} = State}) ->
-    io:format("List item selected~n"),
-    Pid = wxListCtrl:getItemText(Grid, Row),
-    {noreply, {Config, Info, State#pro_wx_state{selected = list_to_pid(Pid)}}};
+	     #pro_wx_state{holder = Holder} = State) ->
+    Str = get_row(Holder, Row, all),
+    io:format("List item selected ~p~n", [Str]),
+    %%{noreply, State#pro_wx_state{selected = list_to_pid(Pid)}};
+    {noreply, State};
 
-handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}}, {Config, Info, State}) ->
-    NewState = update_sort_order(Col,State),
-    refresh(Info, NewState),
-    {noreply, {Config, Info, NewState}};
+handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}}, 
+	     #pro_wx_state{holder = Holder} = State) ->
+    NewState = update_sort_order(Col, State),
+    Holder ! {change_sort_order, NewState#pro_wx_state.sort_order},
+    refresh_grid(Holder),
+    {noreply, NewState};
 
-handle_event(#wx{event = #wxList{type = command_list_item_activated}}, 
-	     {#opts{node = Node} = Config,
-	      Info, 
-	      #pro_wx_state{trace_options = Options} = State}) ->
-    io:format("List item activated~n"),
-    {noreply, {Config, Info,State}};
+%% handle_event(#wx{event = #wxList{type = command_list_item_activated}}, 
+%% 	     #pro_wx_state{node = Node,
+%% 			   trace_options = Options} = State) ->
+%%     io:format("List item activated~n"),
+%%     {noreply, State};
+
+
 %% case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
 %% 	false ->
 %% 	    Pid = erltop_process:start(State#pro_wx_state.selected,
 %% 		   		       Options,
-%% 		  		       State#pro_wx_state.process_info, %%bort
+%% 		  		       State#pro_wx_state.process_info_settings, %%bort
 %% 		   		       Node,
 %% 		   		       self()),
 
@@ -638,13 +625,30 @@ handle_event(Event, State) ->
 
 
 
-
-
-
-get_row(Holder, Item, Column) ->
-    io:format("get_row/3~n"),
+get_selected_pids(Holder, Indices) ->
     Ref = erlang:monitor(process, Holder),
-    Holder ! {get_row, self(), Item, Column},
+    Holder ! {get_pids, self(), Indices},
+    receive
+	{'DOWN', Ref, _, _, _} -> [];
+	{Holder, Res} ->
+	    erlang:demonitor(Ref),
+	    Res
+    end.
+
+get_row(Holder, Row, Column) ->
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_row, self(), Row, Column},
+    receive
+    	{'DOWN', Ref, _, _, _} -> "";
+    	{Holder, Res} ->
+    	    erlang:demonitor(Ref),
+    	    Res
+    end.
+
+
+get_attr(Holder, Item) ->
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_attr, self(), Item},
     receive
 	{'DOWN', Ref, _, _, _} -> "";
 	{Holder, Res} ->
@@ -652,34 +656,92 @@ get_row(Holder, Item, Column) ->
 	    Res
     end.
 
+init_table_holder(Parent, Info, Attrs, SortOrder) ->
+    table_holder(#holder{parent = Parent,
+			 procinfo = Info,
+			 attrs = Attrs,
+			 sort_order = SortOrder}).
 
-
-init_table_holder(Node, Parent, Cols, Info) ->
-    table_holder(#holder{node=Node, parent=Parent,
-			 columns=Cols, info = Info}).
-
-table_holder(#holder{parent=Parent, info = Info} = S0) ->
+table_holder(#holder{parent = Parent,
+		     procinfo = Info,
+		     attrs = Attrs,
+		     sort_order = SortOrder} = S0) ->
     receive
 	{get_row, From, Row, Col} ->
-	    io:format("Received {getrow...~n"),
-	    get_row(From, Row, Col, Info),
+	    get_row(From, Row, Col, Info, SortOrder),
 	    table_holder(S0);
+	{get_attr, From, Row} ->
+	    get_attr(From, Row, Attrs),
+	    table_holder(S0);
+	{get_info, From} ->
+	    From ! Info,
+	    table_holder(S0);
+	{get_pids, From, Indices} ->
+	    get_pids(From, Indices, Info, SortOrder),
+	    table_holder(S0);
+	{change_sort_order, SortOrder2} ->
+	    table_holder(S0#holder{sort_order = SortOrder2});
+	#etop_info{procinfo = ProcInfo} ->
+	    Parent ! {holder_updated, length(ProcInfo)},
+	    table_holder(S0#holder{procinfo = ProcInfo});
 	What ->
 	    io:format("Table holder got ~p~n",[What]),
 	    table_holder(S0)
     end.
 
 
-get_row(From, Row, Col, Info) ->
-    io:format("get_row/4~n"),
-    case element(Col, lists:nth(Row+1, Info)) of
-	I ->
-	    io:format("I: ~p~n", [I]),
-	    From ! {self(), io_lib:format("~w", [I])};
-    	[Object|_] when Col =:= all ->
-    	    From ! {self(), io_lib:format("~w", [Object])};
-    	[Object|_] when tuple_size(Object) >= Col ->
-    	    From ! {self(), io_lib:format("~w", [element(Col, Object)])};
-    	_ ->
-    	    From ! {self(), ""}
-    end.
+get_procinfo_data(?COL_PID, #etop_proc_info{pid = Pid}) ->
+    Pid;
+get_procinfo_data(?COL_NAME, #etop_proc_info{name = Name})  ->
+    Name;
+get_procinfo_data(?COL_MEM, #etop_proc_info{mem = Mem}) ->
+    Mem;
+get_procinfo_data(?COL_TIME, #etop_proc_info{runtime = RT}) ->
+    RT;
+get_procinfo_data(?COL_REDS, #etop_proc_info{reds = Reds}) ->
+    Reds;
+get_procinfo_data(?COL_FUN, #etop_proc_info{cf = CF}) ->
+    CF;
+get_procinfo_data(?COL_MSG, #etop_proc_info{mq = MQ}) ->
+    MQ.
+
+
+
+get_pids(From, Indices, ProcInfo, {Sort, Dir}) ->
+    SortedInfo = sort_procinfo(ProcInfo, Sort, Dir),
+    From ! {self(),
+	    [X#etop_proc_info.pid || X <- 
+					 [lists:nth(I, SortedInfo) || I <- Indices]]}.
+
+get_row(From, Row, all, Info, {Sort, Dir}) ->
+    SortedInfo = sort_procinfo(Info, Sort, Dir),
+    ProcInfo = lists:nth(Row+1, SortedInfo),
+    From ! {self(), lists:flatten(io_lib:format("~p", [ProcInfo]))};
+get_row(From, Row, Col, Info, {Sort, Dir}) ->
+    SortedInfo = sort_procinfo(Info, Sort, Dir),
+    ProcInfo = lists:nth(Row+1, SortedInfo),
+    Data = get_procinfo_data(Col, ProcInfo),
+    From ! {self(), io_lib:format("~p", [Data])}.
+
+get_attr(From, Row, Attrs) ->
+    Attribute = case Row rem 2 =:= 0 of
+		    true ->
+			Attrs#attrs.even;
+		    false ->
+			Attrs#attrs.odd
+		end,
+    From ! {self(), Attribute}.
+
+create_attrs() ->
+    Font = wxSystemSettings:getFont(?wxSYS_DEFAULT_GUI_FONT),
+    Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),
+    #attrs{even = wx:typeCast(wx:null(), wxListItemAttr),
+	   odd  = wxListItemAttr:new(Text, {240,240,255}, Font),
+	   searched = wxListItemAttr:new(Text, {235,215,90}, Font)
+	  }.
+
+sort_procinfo(Info, Key, incr) ->
+    lists:keysort(Key, Info);
+sort_procinfo(Info, Key, decr) ->
+    lists:reverse(lists:keysort(Key, Info)).
+

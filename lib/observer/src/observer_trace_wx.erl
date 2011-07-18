@@ -278,7 +278,6 @@ start_trace(Node, TracedProcs, TracedDict,
 			   events = Events, on_1st_spawn = On1Spawn,
 			   on_all_spawn = AllSpawn, on_1st_link = On1Link,
 			   on_all_link = AllLink}) ->
-    
     MyPid = self(),
     HandlerFun = fun(NewMsg, _) ->
 			 MyPid ! NewMsg
