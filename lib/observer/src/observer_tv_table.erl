@@ -32,7 +32,7 @@
 -include_lib("wx/include/wx.hrl").
 -include("observer_tv.hrl").
 
--define(ID_TABINFO, 400).
+-define(ID_TABLE_INFO, 400).
 -define(ID_REFRESH, 401).
 -define(ID_REFRESH_INTERVAL, 402).
 -define(ID_EDIT, 403).
@@ -175,7 +175,7 @@ add_columns(Grid, Start, ColumnNames) ->
 
 create_menus(MB) ->
     File = wxMenu:new(),
-    wxMenu:append(File, ?ID_TABINFO, "Table Information"),
+    wxMenu:append(File, ?ID_TABLE_INFO, "Table Information\tCtrl-I"),
     wxMenu:append(File, ?wxID_CLOSE, "Close"),
     wxMenuBar:append(MB, File, "File"),
     Edit = wxMenu:new(),
@@ -245,10 +245,8 @@ complete_edit(Row, New0, Pid) ->
 	{ok, Term} = erl_parse:parse_term(Tokens),
 	Pid ! {edit, Row, Term}
     catch _:{badmatch, {error, {_, _, Err}}} ->
-	    io:format("Parse error: ~p~n",[Err]),
-	    self() ! {error, ["Parse error", Err]};
-	  Err ->
-	    io:format("scan error: ~p~n",[Err]),
+	    self() ! {error, ["Parse error: ", Err]};
+	  _Err ->
 	    self() ! {error, ["Syntax error in: ", New]}
     end.
 
@@ -398,6 +396,11 @@ handle_event(#wx{id=?SEARCH_ENTRY, event=#wxCommand{cmdString=Str}},
     catch _:_ -> {noreply, State}
     end;
 
+handle_event(#wx{id=?ID_TABLE_INFO},
+	     State = #state{frame=Frame, node=Node, source=Source, tab=Table}) ->
+    observer_tv_wx:display_table_info(Frame, Node, Source, Table),
+    {noreply, State};
+
 handle_event(Event, State) ->
     io:format("~p:~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
@@ -425,26 +428,24 @@ handle_info({refresh, Min, Max}, State = #state{grid=Grid}) ->
     wxListCtrl:refreshItems(Grid, Min, Max),
     {noreply, State};
 handle_info({error, Error}, State = #state{frame=Frame}) ->
-    io:format("Error Msg ~p~n",[Error]),
-    %% Dlg = wxMessageDialog:new(Frame, "Foobar"),
-    %% wxMessageDialog:showModal(Dlg),
-    %% wxMessageDialog:destroy(Dlg),
+    Dlg = wxMessageDialog:new(Frame, Error),
+    wxMessageDialog:showModal(Dlg),
+    wxMessageDialog:destroy(Dlg),
     {noreply, State};
 
 handle_info(Event, State) ->
     io:format("~p:~p, handle info ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
 
-terminate(Event, #state{pid=Pid,
-			attrs=#attrs{odd=Odd, deleted=D, changed=Ch, searched=S}}) ->
+terminate(_Event, #state{pid=Pid, attrs=Attrs}) ->
     %% ListItemAttr are not auto deleted
+    #attrs{odd=Odd, deleted=D, changed=Ch, searched=S} = Attrs,
     wxListItemAttr:destroy(Odd),
     wxListItemAttr:destroy(D),
     wxListItemAttr:destroy(Ch),
     wxListItemAttr:destroy(S),
     unlink(Pid),
     exit(Pid, window_closed),
-    io:format("~p:~p, terminate ~p\n", [?MODULE, ?LINE, Event]),
     ok.
 
 code_change(_, _, State) ->
@@ -528,7 +529,7 @@ table_holder(S0 = #holder{parent=Parent, pid=Pid, table=Table}) ->
 	    table_holder(S0#holder{search=Row});
 	refresh when is_pid(Pid) ->
 	    %% Already getting the table...
-	    io:format("ignoring refresh", []),
+	    %% io:format("ignoring refresh", []),
 	    table_holder(S0);
 	refresh ->
 	    GetTab = rpc:call(S0#holder.node, ?MODULE, get_table,
@@ -703,8 +704,7 @@ delete(Row, #holder{tabid=Id, table=Table,
 		ok = rpc:call(Node, mnesia, dirty_delete_object, [Id, Object])
 	end,
 	ok
-    catch _:Error ->
-	    io:format("~p:~p: Error ~p ~p~n",[?MODULE,?LINE, Error, erlang:get_stacktrace()]),
+    catch _:_Error ->
 	    {error, "node or table is not available"}
     end.
 
@@ -728,8 +728,7 @@ insert(Object, #holder{tabid=Id, source=Source, node=Node}) ->
 		ok = rpc:call(Node, mnesia, dirty_write, [Id, Object])
 	end,
 	ok
-    catch _:Error ->
-	    io:format("~p:~p: Error ~p ~p~n",[?MODULE,?LINE, Error, erlang:get_stacktrace()]),
+    catch _:_Error ->
 	    {error, "node or table is not available"}
     end.
 
