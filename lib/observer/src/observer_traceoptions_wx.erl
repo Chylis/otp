@@ -789,9 +789,9 @@ handle_event(#wx{id = ?MATCHPAGE_ADDFUN,
 			  case lists:member(FunMS, MatchSpecs) of
 			      true ->
 				  create_msgdialog(Frame, StrFun ++ "\nalready exists"),
-				  wxStyledTextCtrl:setText(StyledTxtCtrl, StrMS),
 				  MatchSpecs;
 			      false ->
+				  wxStyledTextCtrl:setText(StyledTxtCtrl, StrMS),
 				  update_matchspec_listbox(StrFun, {PopupListBox, PageListBox}, From),
 				  lists:reverse([FunMS | MatchSpecs])
 			  end;
