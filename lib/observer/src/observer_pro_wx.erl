@@ -60,22 +60,12 @@
 -define(LAST_NODES_MENU_ID,  2000).
 
 %% Records
--record(pid, {window, traced}).
 -record(attrs, {even, odd, deleted, changed, searched}).
+
 -record(holder, {parent,
 		 procinfo,
 		 attrs,
 		 sort_order}).
-
--record(trace_options, {send         = false,
-			treceive     = false,
-			functions    = false,
-			events       = false,
-			on_1st_spawn = false,
-			on_all_spawn = false,
-			on_1st_link  = false,
-			on_all_link  = false,
-			main_window  = true}).
 
 -record(pro_wx_state, {parent,
 		       code_frame,

@@ -861,7 +861,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 				  
 				  if 
 				      OccupiedAlias =:= match -> 
-					  create_msgdialog(Frame, "Alias " ++ Alias ++ "\nalready exists"),
+					  create_msgdialog(Frame, "Alias " ++ Alias ++ " already exists"),
 					  MatchSpecs;
 				      true ->
 					  update_matchspec_listbox(Alias, {PopupListBox, PageListBox}, From),
