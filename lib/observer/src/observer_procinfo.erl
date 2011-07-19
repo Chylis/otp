@@ -12,12 +12,14 @@
 
 -define(CLOSE, 1).
 -define(REFRESH, 2).
+-define(SELECT_ALL, 3).
 
 -record(procinfo_state, {parent,
 			 frame,
 			 node,
 			 pid,
 			 styled_txtctrl,
+			 checklistbox,
 			 itemlist = [{backtrace, false},
 				     {binary, false},
 				     {catchlevel, false},
@@ -56,38 +58,52 @@ init([Node, Process, ParentFrame, Parent]) ->
 			    node = Node,
 			    pid = Process
 			   },
-    {Frame, STC} = setup(ParentFrame, Node, Process, State#procinfo_state.itemlist),
+    {Frame, STC, CheckListBox} = setup(ParentFrame, Node, Process, State#procinfo_state.itemlist),
     {Frame, State#procinfo_state{frame = Frame,
-				 styled_txtctrl = STC}}.
+				 styled_txtctrl = STC,
+				 checklistbox = CheckListBox}}.
 
 setup(ParentFrame, Node, Pid, ItemList) ->
     Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Process information", [{size, {900,900}}]),
     Panel = wxPanel:new(Frame, []),
     MainSz = wxBoxSizer:new(?wxHORIZONTAL),
     CheckSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, "View"}]),
+    BtnSz = wxBoxSizer:new(?wxHORIZONTAL),
     MenuBar = wxMenuBar:new(),
     create_menues(MenuBar),
     
     StyledTxtCtrl = create_styled_txtctrl(Panel),
     wxStyledTextCtrl:setText(StyledTxtCtrl, 
 			     get_formatted_values(Node, Pid, ItemList)),
-    wxSizer:add(MainSz, StyledTxtCtrl, [{proportion, 1}, {flag, ?wxEXPAND}]),
+
     Choices = [atom_to_list(Tag) || {Tag, _} <- ItemList],
     CheckListBox = wxCheckListBox:new(Panel, ?wxID_ANY, [{choices, Choices},
 							 {style, ?wxLB_EXTENDED},
 							 {style, ?wxLB_SORT}, 
 							 {style, ?wxLB_NEEDED_SB}]),
-    wxSizer:add(CheckSz, CheckListBox, [{proportion, 1}]),
-    wxSizer:add(MainSz, CheckSz, [{flag, ?wxEXPAND}]),
+    
     check_boxes(CheckListBox, ItemList),
     wxCheckListBox:connect(CheckListBox, command_checklistbox_toggled),
     
+    SelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Select all"}]),
+    DeSelAllBtn = wxButton:new(Panel, ?SELECT_ALL, [{label, "Deselect all"}]),
+    
+    wxButton:connect(SelAllBtn, command_button_clicked, [{userData, true}]),
+    wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, false}]),
+    
+    wxSizer:add(MainSz, StyledTxtCtrl, [{proportion, 1}, {flag, ?wxEXPAND}]),
+    wxSizer:add(CheckSz, CheckListBox, [{proportion, 1}]),
+    wxSizer:add(BtnSz, SelAllBtn),
+    wxSizer:add(BtnSz, DeSelAllBtn),
+    wxSizer:add(CheckSz, BtnSz),
+    wxSizer:add(MainSz, CheckSz, [{flag, ?wxEXPAND}]),
+        
     wxWindow:setSizer(Panel, MainSz),
     wxFrame:setMenuBar(Frame, MenuBar),
     wxFrame:show(Frame),
     wxFrame:connect(Frame, close_window),
     wxMenu:connect(Frame, command_menu_selected),
-    {Frame, StyledTxtCtrl}.
+    {Frame, StyledTxtCtrl, CheckListBox}.
 
 create_menues(MenuBar) ->
     observer_wx:create_menu(
@@ -97,7 +113,11 @@ create_menues(MenuBar) ->
       ],
       MenuBar).
 	
-
+check_boxes(CheckListBox, Bool, all) ->
+    lists:foreach(fun(Index) ->
+			  wxCheckListBox:check(CheckListBox, Index, [{check, Bool}])
+		  end,
+		  lists:seq(0, wxControlWithItems:getCount(CheckListBox))).
 check_boxes(CheckListBox, ItemList) ->
     lists:foldl(fun({_, Bool}, Index) ->
 			wxCheckListBox:check(CheckListBox, Index, [{check, Bool}]),
@@ -192,6 +212,23 @@ handle_event(#wx{event = #wxCommand{type = command_checklistbox_toggled,
     StyledProcInfo = get_formatted_values(Node, Process, ItemList2),
     wxStyledTextCtrl:setText(STC, StyledProcInfo),
     {noreply, State#procinfo_state{itemlist = ItemList2}};
+
+handle_event(#wx{id = ?SELECT_ALL,
+		 event = #wxCommand{type = command_button_clicked},
+		 userData = Bool},
+	     #procinfo_state{node = Node,
+			     pid = Process,
+			     itemlist = ItemList,
+			     styled_txtctrl = Stc,
+			     checklistbox = CheckListBox} = State) ->
+    check_boxes(CheckListBox, Bool, all),
+    ItemList2 = lists:keymap(fun(_) ->
+				     Bool
+			     end,
+			     2, ItemList),
+    wxStyledTextCtrl:setText(Stc, get_formatted_values(Node, Process, ItemList2)),
+    {noreply, State#procinfo_state{itemlist = ItemList2}};
+    
 
 handle_event(Event, State) ->
     io:format("~p: ~p, Handle event: ~p~n", [?MODULE, ?LINE, Event]),
