@@ -314,51 +314,28 @@ check_box(ChkBox, Bool) ->
     end.
 
 parse_record_function_names(RecordList) ->
-    StrList = [atom_to_list(FName) ++ integer_to_list(Arity)
+    StrList = [atom_to_list(FName) ++ "/" ++ integer_to_list(Arity)
 	       || #traced_func{func_name = FName, arity = Arity} <- RecordList],
     parse_function_names(StrList, []).
 
 parse_function_names(Choices) ->
-    StrList = [atom_to_list(Name) ++ integer_to_list(Arity) || {Name, Arity} <- Choices],
+    StrList = [atom_to_list(Name) ++ "/" ++ integer_to_list(Arity) || {Name, Arity} <- Choices],
     parse_function_names(StrList, []).
 
 parse_function_names([], Acc) ->
     lists:reverse(Acc);
-parse_function_names([ [H1|T1] = Head | Tail ], Acc) ->
-    Parsed = case is_inner_function(H1, T1) of
-		 fun_ ->
-		     "Fun: " ++ Head;
-		 lc ->
-		     "List comprehension: " ++ Head;
-		 lbc ->
-		     "Bit comprehension: " ++ Head;
-		 _ ->
-		     Head
-	     end,
-    parse_function_names(Tail, [Parsed | Acc]).
-
-
-is_inner_function(Head, Tail) when Head =:= []; Tail =:= [] ->
-    false;
-is_inner_function($', Tail) ->
-    [H|T] = Tail,
-    is_inner_function(H, T);
-is_inner_function($-, Tail) -> 
-    [_|T] = lists:dropwhile(fun(Elem) -> Elem =/= $- end, Tail),
-    check_innerfunc_sort(T);
-is_inner_function(_, _) ->
-    false.
-
-check_innerfunc_sort(List) ->
-    Fun = lists:prefix("fun-", List),
-    Lc = lists:prefix("lc$^", List),
-    Lb = lists:prefix("lbc$^", List),   
-    if  Fun =:= true -> fun_;
-	Lc =:= true -> lc;
-	Lb =:= true -> lbc;
-	true ->
-	    false
-    end.
+parse_function_names([H|T], Acc) ->
+    IsFun = re:run(H, "-fun-\\d*?-"),
+    IsLc = re:run(H, "-lc\\$\\^\\d*?/\\d*?-\\d*?-"),
+    IsLbc = re:run(H, "-lbc\\$\\^\\d*?/\\d*?-\\d*?-"),
+    Parsed = 
+	if IsFun =/= nomatch -> "Fun: " ++ H;
+	   IsLc =/= nomatch -> "List comprehension: " ++ H;
+	   IsLbc =/= nomatch -> "Bit comprehension: " ++ H;
+	   true ->
+		H
+	end,
+    parse_function_names(T, [Parsed | Acc]).
 
 show_ms_in_savedlistbox(MatchSpecList) ->
     MsOrAlias = fun(#match_spec{alias = A, str_ms = M, fun2ms = F}) ->
