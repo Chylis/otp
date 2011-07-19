@@ -325,9 +325,10 @@ parse_function_names(Choices) ->
 parse_function_names([], Acc) ->
     lists:reverse(Acc);
 parse_function_names([H|T], Acc) ->
-    IsFun = re:run(H, "-fun-\\d*?-"),
-    IsLc = re:run(H, "-lc\\$\\^\\d*?/\\d*?-\\d*?-"),
-    IsLbc = re:run(H, "-lbc\\$\\^\\d*?/\\d*?-\\d*?-"),
+    IsFun = re:run(H, ".*-fun-\\d*?-"),
+    IsLc = re:run(H, ".*-lc\\$\\^\\d*?/\\d*?-\\d*?-"),
+    IsLbc = re:run(H, ".*-lbc\\$\\^\\d*?/\\d*?-\\d*?-"),
+    io:format("~p~n", [IsLc]),
     Parsed = 
 	if IsFun =/= nomatch -> "Fun: " ++ H;
 	   IsLc =/= nomatch -> "List comprehension: " ++ H;
@@ -535,10 +536,6 @@ find_index([Sel|STail] = Selections, FunctionList, N, Acc) when is_list(Sel) ->
 	false ->
 	    find_index(Selections, FunctionList, N+1, Acc)
     end.
-
-
-
-
 
 atomlist_to_stringlist(Modules) ->
     [atom_to_list(X) || X <- Modules].
@@ -787,7 +784,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 			      matchspec_popup_listbox = PopupListBox} = State) ->
     
     {StyledTxtCtrl, Frame} = get_correct_matchspec_components(From, State),
-    StrMS = wxStyledTextCtrl:getText(StyledTxtCtrl),
+    StrMS = ensure_last_is_dot(wxStyledTextCtrl:getText(StyledTxtCtrl)),
     MatchSpecs2 = case check_correct_MS(StrMS) of
 		      {true, TermMS} ->
 			  MS = #match_spec{str_ms = StrMS, term_ms = TermMS},
