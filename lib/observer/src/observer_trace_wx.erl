@@ -1,6 +1,6 @@
 -module(observer_trace_wx).
 
--export([start/5]).
+-export([start/6]).
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
 	 handle_event/2, handle_cast/2]).
 
@@ -30,10 +30,10 @@
 	  match_specs = []}).%?PREDEFINED_MS}). % [ #match_spec ]
 
 
-start(Node, TracedProcs, TraceOpts, ParentFrame, ParentPid) ->
-    wx_object:start_link(?MODULE, [Node, TracedProcs, TraceOpts, ParentFrame, ParentPid], []).
+start(Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid) ->
+    wx_object:start_link(?MODULE, [Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid], []).
 
-init([Node, TracedProcs, TraceOpts, ParentFrame, ParentPid]) ->
+init([Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid]) ->
     State = 
 	wx:batch(fun() ->
 			 create_window(ParentFrame, TraceOpts)
@@ -42,26 +42,8 @@ init([Node, TracedProcs, TraceOpts, ParentFrame, ParentPid]) ->
     Frame = State#state.frame,
     TraceOpts2 = State#state.trace_options,
     TracedFuncs = State#state.traced_funcs,
-    StrMs1 = "[{'_', [], [{return_trace}]}].",
-    StrMs2 = "[{'_', [], [{exception_trace}]}].",
-    StrMs3 = "[{'_', [], [{message, {caller}}]}].",
-    StrMs4 = "[{'_', [], [{message, {process_dump}}]}].",
-       
-    {ok, Tokens1, _} = erl_scan:string(StrMs1),
-    {ok, Tokens2, _} = erl_scan:string(StrMs2),
-    {ok, Tokens3, _} = erl_scan:string(StrMs3),
-    {ok, Tokens4, _} = erl_scan:string(StrMs4),
-    {ok, Term1} = erl_parse:parse_term(Tokens1),
-    {ok, Term2} = erl_parse:parse_term(Tokens2),
-    {ok, Term3} = erl_parse:parse_term(Tokens3),
-    {ok, Term4} = erl_parse:parse_term(Tokens4),
-
-    MatchSpecs = [#match_spec{term_ms = Term1, str_ms = StrMs1},
-		  #match_spec{term_ms = Term2, str_ms = StrMs2},
-		  #match_spec{term_ms = Term3, str_ms = StrMs3},
-		  #match_spec{term_ms = Term4, str_ms = StrMs4}],
     
-        wx_object:start(observer_traceoptions_wx,
+    wx_object:start(observer_traceoptions_wx,
     		    [Frame, self(), Node, TraceOpts2, TracedFuncs, MatchSpecs],
     		    []),
     
@@ -131,8 +113,11 @@ create_menues(MenuBar) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 						%Main window
 
-handle_event(#wx{id = ?CLOSE, event = #wxCommand{type = command_menu_selected}}, State) ->
-    io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
+handle_event(#wx{id = ?CLOSE, event = #wxCommand{type = command_menu_selected}},
+	     #state{parent = Parent,
+		    trace_options = TraceOpts,
+		    match_specs = MatchSpecs} = State) ->
+    Parent ! {tracemenu_closed, TraceOpts, MatchSpecs},
     {stop, shutdown, State};
 
 handle_event(#wx{id = ?OPTIONS, event = #wxCommand{type = command_menu_selected}}, 
@@ -199,8 +184,11 @@ handle_event(#wx{id = ?LOAD_TRACEOPTS,
 	    {noreply, State2};
     
 
-handle_event(#wx{event = #wxClose{type = close_window}}, State) ->
-    io:format("~p Shutdown. ~p\n", [?MODULE, self()]),
+handle_event(#wx{event = #wxClose{type = close_window}}, 
+	     #state{parent = Parent,
+		    trace_options = TraceOpts,
+		    match_specs = MatchSpecs} = State) ->
+    Parent ! {tracemenu_closed, TraceOpts, MatchSpecs},
     {stop, shutdown, State};
 
 handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, commandInt = 1}}, 
@@ -257,9 +245,8 @@ handle_info(Any, State) ->
     {noreply, State}.
 
 
-terminate(Reason, #state{parent = Parent, frame = Frame}) ->
+terminate(Reason, #state{frame = Frame}) ->
     io:format("~p terminating tracemenu. Reason: ~p~n", [?MODULE, Reason]),
-    Parent ! tracemenu_closed,
     wxFrame:destroy(Frame),
     ok.
 

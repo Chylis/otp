@@ -109,8 +109,9 @@ init([Notebook, Parent]) ->
     Count = length(Info#etop_info.procinfo),
     {ProPanel, State} = setup(Notebook, Parent, Holder, Count),
     refresh_grid(Holder),
+    MatchSpecs = generate_matchspecs(),
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
-    {ProPanel, State}.
+    {ProPanel, State#pro_wx_state{match_specs = MatchSpecs}}.
 
 setup(Notebook, Parent, Holder, Count) ->
     ProPanel = wxPanel:new(Notebook, []),
@@ -146,6 +147,32 @@ setup(Notebook, Parent, Holder, Count) ->
 			   tracemenu_opened = false,
 			   holder = Holder}, 
     {ProPanel, State}.
+
+generate_matchspecs() ->
+    try
+	StrMs1 = "[{'_', [], [{return_trace}]}].",
+	StrMs2 = "[{'_', [], [{exception_trace}]}].",
+	StrMs3 = "[{'_', [], [{message, {caller}}]}].",
+	StrMs4 = "[{'_', [], [{message, {process_dump}}]}].",
+	
+	{ok, Tokens1, _} = erl_scan:string(StrMs1),
+	{ok, Tokens2, _} = erl_scan:string(StrMs2),
+	{ok, Tokens3, _} = erl_scan:string(StrMs3),
+	{ok, Tokens4, _} = erl_scan:string(StrMs4),
+	{ok, Term1} = erl_parse:parse_term(Tokens1),
+	{ok, Term2} = erl_parse:parse_term(Tokens2),
+	{ok, Term3} = erl_parse:parse_term(Tokens3),
+	{ok, Term4} = erl_parse:parse_term(Tokens4),
+	
+	[#match_spec{term_ms = Term1, str_ms = StrMs1},
+	 #match_spec{term_ms = Term2, str_ms = StrMs2},
+	 #match_spec{term_ms = Term3, str_ms = StrMs3},
+	 #match_spec{term_ms = Term4, str_ms = StrMs4}]
+    catch
+	_:_ ->
+	    []
+    end.
+
 %% UI-creation
 
 create_pro_menu(Parent) ->
@@ -325,11 +352,10 @@ handle_info(time_to_update, #pro_wx_state{holder = Holder} = State) ->
     erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {noreply, State};
 
-handle_info({updated_traceopt, TraceOpts}, State) -> %When user updates traceoptions from tracemenu..
-    {noreply, State#pro_wx_state{trace_options = TraceOpts}};
-
-handle_info(tracemenu_closed, State) -> %When tracemenu terminates..
-    {noreply, State#pro_wx_state{tracemenu_opened = false}};
+handle_info({tracemenu_closed, TraceOpts, MatchSpecs}, State) -> %When tracemenu terminates..
+    {noreply, State#pro_wx_state{tracemenu_opened = false,
+				 trace_options = TraceOpts,
+				 match_specs = MatchSpecs}};
 
 handle_info({procinfo_menu_closed, Pid}, 
 	    #pro_wx_state{procinfo_menu_pids = MenuPids} = State) ->
@@ -376,8 +402,9 @@ handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
 
-terminate(Reason, _State) ->
+terminate(Reason, #pro_wx_state{holder = Holder}) ->
     etop:stop(),
+    Holder ! stop,
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
     ok.
 
@@ -487,6 +514,7 @@ handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_select
 handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_selected}}, 
 	     #pro_wx_state{node = Node,
 			   trace_options = Options,
+			   match_specs = MatchSpecs,
 			   holder = Holder,
 			   grid = Grid,
 			   tracemenu_opened = false, 
@@ -496,6 +524,7 @@ handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_sele
     observer_trace_wx:start(Node,
      			    PidList,
      			    Options,
+			    MatchSpecs,
      			    Frame,
      			    self()),
     {noreply,  State#pro_wx_state{tracemenu_opened = true}};
@@ -503,12 +532,14 @@ handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_sele
 handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu_selected}},
 	     #pro_wx_state{node = Node,
 			   trace_options = Options,
+			   match_specs = MatchSpecs,
 			   tracemenu_opened = false,
 			   frame = Frame} = State) ->
 
-        observer_trace_wx:start(Node,
+    observer_trace_wx:start(Node,
 			    all,
 			    Options,
+			    MatchSpecs,
 			    Frame,
 			    self()),
     {noreply, State#pro_wx_state{tracemenu_opened = true}};
@@ -517,12 +548,14 @@ handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu
 handle_event(#wx{id = ?ID_TRACE_NEW_MENU, event = #wxCommand{type = command_menu_selected}},
 	     #pro_wx_state{node = Node,
 			   trace_options = Options,
+			   match_specs = MatchSpecs,
 			   tracemenu_opened = false,
 			   frame = Frame} = State) ->
     
     observer_trace_wx:start(Node,
 			    new,
 			    Options,
+			    MatchSpecs,
 			    Frame,
 			    self()),
     {noreply,  State#pro_wx_state{tracemenu_opened = true}};
@@ -578,21 +611,6 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated,
 	    observer_procinfo:start(Node, SelectedPid, Frame, self()),
 	    {noreply, State#pro_wx_state{procinfo_menu_pids = [SelectedPid | MenuPids]}}
     end;
-
-%% case lists:keysearch(State#pro_wx_state.selected, #pid.traced, State#pro_wx_state.opened) of
-%% 	false ->
-%% 	    Pid = erltop_process:start(State#pro_wx_state.selected,
-%% 		   		       Options,
-%% 		  		       State#pro_wx_state.process_info_settings, %%bort
-%% 		   		       Node,
-%% 		   		       self()),
-
-%% 	    {noreply, {Config, Info, State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,
-%% 								window = Pid} | State#pro_wx_state.opened]}}};
-%% 	{value, _Tuple} ->
-%% 	    io:format("Already open\n", []),
-%%{noreply, {ProcInfo,State}};
-%% end;
 
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
@@ -680,6 +698,8 @@ table_holder(#holder{parent = Parent,
 	#etop_info{procinfo = ProcInfo} ->
 	    Parent ! {holder_updated, length(ProcInfo)},
 	    table_holder(S0#holder{procinfo = ProcInfo});
+	stop ->
+	    ok;
 	What ->
 	    io:format("Table holder got ~p~n",[What]),
 	    table_holder(S0)
