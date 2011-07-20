@@ -45,16 +45,17 @@
 -define(ID_VIEW, 201).
 -define(ID_PROC, 202).
 -define(ID_REFRESH, 203).
--define(ID_DUMP_TO_FILE, 204).
--define(ID_TRACEMENU, 208).
--define(ID_TRACE_ALL_MENU, 209).
--define(ID_TRACE_NEW_MENU, 210).
--define(ID_OPTIONS, 211).
--define(ID_SAVE_OPT, 212).
--define(ID_MODULE_INFO, 213).
--define(OK, 214).
--define(ID_SYSHIDE, 215).
--define(ID_HIDENEW, 216).
+-define(ID_REFRESH_INTERVAL, 204).
+-define(ID_DUMP_TO_FILE, 205).
+-define(ID_TRACEMENU, 206).
+-define(ID_TRACE_ALL_MENU, 207).
+-define(ID_TRACE_NEW_MENU, 208).
+-define(ID_OPTIONS, 209).
+-define(ID_SAVE_OPT, 210).
+-define(ID_MODULE_INFO, 211).
+-define(OK, 212).
+-define(ID_SYSHIDE, 213).
+-define(ID_HIDENEW, 214).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -77,7 +78,7 @@
 		       options_pid, %%onödig?
 		       opened = [], %%onödig?
 		       process_info_settings, %%onödig
-		       interval,
+		       refr_timer = false,
 		       hide_system, %%onödig?
 		       hide_modules, %%onödig?
 		       hide_pids,%%onödig?
@@ -110,7 +111,6 @@ init([Notebook, Parent]) ->
     {ProPanel, State} = setup(Notebook, Parent, Holder, Count),
     refresh_grid(Holder),
     MatchSpecs = generate_matchspecs(),
-    erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {ProPanel, State#pro_wx_state{match_specs = MatchSpecs}}.
 
 setup(Notebook, Parent, Holder, Count) ->
@@ -124,10 +124,8 @@ setup(Notebook, Parent, Holder, Count) ->
 			      {border,4}]),
     
     wxWindow:setSizer(ProPanel, Sizer),
-    
-    Interval = 5000, %erltop:getopt(intv, Config),
-    
-    ProcessInfo = [ % sorted
+       
+    ProcessInfo = [ 
 		    error_handler,
 		    garbage_collection,
 		    group_leader,
@@ -143,7 +141,6 @@ setup(Notebook, Parent, Holder, Count) ->
 			   frame       = ProPanel,
 			   parent_notebook = Notebook,
 			   process_info_settings = ProcessInfo,
-			   interval = Interval,
 			   tracemenu_opened = false,
 			   holder = Holder}, 
     {ProPanel, State}.
@@ -182,7 +179,7 @@ create_pro_menu(Parent) ->
 		     #create_menu{id = ?ID_HIDENEW, text = "Auto-hide new"}]},
 		   {"Options",
 		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"},
-		     #create_menu{id = ?ID_OPTIONS, text = "Options"}]},
+		     #create_menu{id = ?ID_REFRESH_INTERVAL, text = "Refresh Interval"}]},
 		   {"Trace",
 		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
 		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"},
@@ -246,6 +243,16 @@ change_node(Node) ->
 refresh_grid(Holder) ->
     etop_server ! {update, Holder}.
 
+get_intv() ->
+    etop_server ! {get_intv, self()},
+    receive
+	{intv, Intv} ->
+	    Intv
+    end.
+
+update_intv(NewIntv) ->
+    etop_server ! {config, {intverval, NewIntv}}.
+   			   
 lookup_pid(ProcInfo, Pid) ->
     [Ret] = lists:filter(fun(#etop_proc_info{pid = Pid2}) ->
 				 Pid =:= Pid2
@@ -340,6 +347,43 @@ get_selected_items(Grid, Index, ItemAcc) ->
 	    get_selected_items(Grid, Item, [Item+1 | ItemAcc])
     end.
 
+interval_dialog(Parent, Enabled, Value, Min, Max) ->
+    Dialog = wxDialog:new(Parent, ?wxID_ANY, "Update Interval",
+			  [{style, ?wxDEFAULT_DIALOG_STYLE bor
+				?wxRESIZE_BORDER}]),
+    Panel = wxPanel:new(Dialog),
+    Check = wxCheckBox:new(Panel, ?wxID_ANY, "Periodical refresh"),
+    wxCheckBox:setValue(Check, Enabled),
+    Style = ?wxSL_HORIZONTAL bor ?wxSL_AUTOTICKS bor ?wxSL_LABELS,
+    Slider = wxSlider:new(Panel, ?wxID_ANY, Value, Min, Max,
+			  [{style, Style}, {size, {200, -1}}]),
+    wxWindow:enable(Slider, [{enable, Enabled}]),
+    InnerSizer = wxBoxSizer:new(?wxVERTICAL),
+    Buttons = wxDialog:createButtonSizer(Dialog, ?wxOK bor ?wxCANCEL),
+    Flags = [{flag, ?wxEXPAND bor ?wxALL}, {border, 2}],
+    wxSizer:add(InnerSizer, Check,  Flags),
+    wxSizer:add(InnerSizer, Slider, Flags),
+    wxPanel:setSizer(Panel, InnerSizer),
+    TopSizer = wxBoxSizer:new(?wxVERTICAL),
+    wxSizer:add(TopSizer, Panel, [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
+    wxSizer:add(TopSizer, Buttons, [{flag, ?wxEXPAND}]),
+    wxWindow:setSizerAndFit(Dialog, TopSizer),
+    wxSizer:setSizeHints(TopSizer, Dialog),
+    wxCheckBox:connect(Check, command_checkbox_clicked,
+		       [{callback, fun(#wx{event=#wxCommand{commandInt=Enable0}},_) ->
+					   Enable = Enable0 > 0,
+					   wxWindow:enable(Slider, [{enable, Enable}])
+				   end}]),
+    Res = case wxDialog:showModal(Dialog) of
+	      ?wxID_OK ->
+		  {wxCheckBox:isChecked(Check), wxSlider:getValue(Slider)};
+	      ?wxID_CANCEL ->
+		  cancel
+	  end,
+    wxDialog:destroy(Dialog),
+    Res.
+
+
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
@@ -347,9 +391,9 @@ handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
     wxListCtrl:refreshItems(Grid, 0, wxListCtrl:getItemCount(Grid)),
     {noreply, State};
 
-handle_info(time_to_update, #pro_wx_state{holder = Holder} = State) ->
+handle_info(refresh_interval, #pro_wx_state{holder = Holder} = State) ->
+    io:format("Refresh interval ~p~n", [time()]),
     refresh_grid(Holder),
-    erlang:send_after(State#pro_wx_state.interval, self(), time_to_update),
     {noreply, State};
 
 handle_info({tracemenu_closed, TraceOpts, MatchSpecs}, State) -> %When tracemenu terminates..
@@ -362,15 +406,15 @@ handle_info({procinfo_menu_closed, Pid},
     NewPids = lists:delete(Pid, MenuPids),
     {noreply, State#pro_wx_state{procinfo_menu_pids = NewPids}};
 
-handle_info({checked, Opt, ProcessInfo, Interval}, State) -> %från opts
-    State2 = State#pro_wx_state{trace_options = Opt,
-				process_info_settings  = ProcessInfo,
-				interval = Interval},
-    {noreply, State2};
+%% handle_info({checked, Opt, ProcessInfo, Interval}, State) -> %från opts
+%%     State2 = State#pro_wx_state{trace_options = Opt,
+%% 				process_info_settings  = ProcessInfo,
+%% 				interval = Interval},
+    %% {noreply, State2};
 
-handle_info({save, File}, State) -> %från options
-    State#pro_wx_state.parent ! {statusbar, "Options saved: " ++ File},
-    {noreply, State};
+%% handle_info({save, File}, State) -> %från options
+%%     State#pro_wx_state.parent ! {statusbar, "Options saved: " ++ File},
+%%     {noreply, State};
 
 handle_info({active, Node}, #pro_wx_state{holder = Holder,
 					  parent = Parent} = State) ->
@@ -456,6 +500,28 @@ handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_select
     io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
     refresh_grid(Holder),
     {noreply, State};
+
+handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
+	     #pro_wx_state{frame = Frame, refr_timer=Timer0} = State) ->
+    Intv0 = get_intv(),
+    case interval_dialog(Frame, Timer0 /= false, Intv0, 10, 5*60) of
+	cancel ->
+	    {noreply, State};
+	{true, Intv} ->
+	    case Timer0 of
+		false -> ok;
+		_ -> timer:cancel(Timer0)
+	    end,
+	    update_intv(Intv),
+	    {ok, Timer} = timer:send_interval(Intv * 1000, refresh_interval),
+	    {noreply, State#pro_wx_state{refr_timer=Timer}};
+	{false, _} ->
+	    case Timer0 of
+		false -> ok;
+		_ -> timer:cancel(Timer0)
+	    end,
+	    {noreply, State#pro_wx_state{refr_timer=false}}
+    end;
 
 %% handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{selected = Sel} = State) ->
 %%     case Sel of
@@ -637,8 +703,6 @@ handle_event(Event, State) ->
 
 
 
-
-
 get_selected_pids(Holder, Indices) ->
     Ref = erlang:monitor(process, Holder),
     Holder ! {get_pids, self(), Indices},
@@ -695,7 +759,7 @@ table_holder(#holder{parent = Parent,
 	    table_holder(S0);
 	{change_sort_order, SortOrder2} ->
 	    table_holder(S0#holder{sort_order = SortOrder2});
-	#etop_info{procinfo = ProcInfo} ->
+	{update, #etop_info{procinfo = ProcInfo}} ->
 	    Parent ! {holder_updated, length(ProcInfo)},
 	    table_holder(S0#holder{procinfo = ProcInfo});
 	stop ->
