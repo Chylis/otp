@@ -50,6 +50,7 @@
 -define(ID_TRACE_NEW_MENU, 208).
 -define(ID_NO_OF_LINES, 209).
 -define(ID_MODULE_INFO, 211).
+-define(ID_CHECK, 212).
 -define(ID_SYSHIDE, 213). %% ej implementerat
 -define(ID_HIDENEW, 214). %% ej implementerat
 
@@ -240,7 +241,7 @@ get_lines() ->
     end.
 
 change_intv(NewIntv) ->
-    etop_server ! {config, {intverval, NewIntv}}.
+    etop_server ! {config, {interval, NewIntv}}.
 
 get_intv() ->
     etop_server ! {get_intv, self()},
@@ -308,19 +309,25 @@ get_selected_items(Grid, Index, ItemAcc) ->
 	    get_selected_items(Grid, Item, [Item+1 | ItemAcc])
     end.
 
-interval_dialog(Parent, Enabled, Value, Min, Max) ->
-    Dialog = wxDialog:new(Parent, ?wxID_ANY, "Update Interval",
+interval_dialog(ParentFrame, ParentPid, Enabled, Value, Min, Max) ->
+    Dialog = wxDialog:new(ParentFrame, ?wxID_ANY, "Update Interval",
 			  [{style, ?wxDEFAULT_DIALOG_STYLE bor
 				?wxRESIZE_BORDER}]),
     Panel = wxPanel:new(Dialog),
-    Check = wxCheckBox:new(Panel, ?wxID_ANY, "Periodical refresh"),
+    Check = wxCheckBox:new(Panel, ?ID_CHECK, "Periodical refresh"),
     wxCheckBox:setValue(Check, Enabled),
     Style = ?wxSL_HORIZONTAL bor ?wxSL_AUTOTICKS bor ?wxSL_LABELS,
     Slider = wxSlider:new(Panel, ?wxID_ANY, Value, Min, Max,
 			  [{style, Style}, {size, {200, -1}}]),
     wxWindow:enable(Slider, [{enable, Enabled}]),
     InnerSizer = wxBoxSizer:new(?wxVERTICAL),
-    Buttons = wxDialog:createButtonSizer(Dialog, ?wxOK bor ?wxCANCEL),
+    
+    OKBtn = wxButton:new(Dialog, ?wxID_OK),
+    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL),
+    Buttons = wxStdDialogButtonSizer:new(),
+    wxStdDialogButtonSizer:addButton(Buttons, OKBtn),
+    wxStdDialogButtonSizer:addButton(Buttons, CancelBtn),
+    
     Flags = [{flag, ?wxEXPAND bor ?wxALL}, {border, 2}],
     wxSizer:add(InnerSizer, Check,  Flags),
     wxSizer:add(InnerSizer, Slider, Flags),
@@ -328,24 +335,76 @@ interval_dialog(Parent, Enabled, Value, Min, Max) ->
     TopSizer = wxBoxSizer:new(?wxVERTICAL),
     wxSizer:add(TopSizer, Panel, [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
     wxSizer:add(TopSizer, Buttons, [{flag, ?wxEXPAND}]),
+    wxStdDialogButtonSizer:realize(Buttons),
     wxWindow:setSizerAndFit(Dialog, TopSizer),
     wxSizer:setSizeHints(TopSizer, Dialog),
     wxCheckBox:connect(Check, command_checkbox_clicked,
-		       [{callback, fun(#wx{event=#wxCommand{commandInt=Enable0}},_) ->
+		       [{callback, fun(#wx{event=#wxCommand{type = command_checkbox_clicked,
+							    commandInt=Enable0}},_) ->
 					   Enable = Enable0 > 0,
 					   wxWindow:enable(Slider, [{enable, Enable}])
-				   end}]),
-    io:format("10~n"), 
-    Res = case wxDialog:showModal(Dialog) of
-    	      ?wxID_OK ->
-    		  {wxCheckBox:isChecked(Check), wxSlider:getValue(Slider)};
-    	      ?wxID_CANCEL ->
-    		  cancel
-    	  end,
-    io:format("11~n"),
-    wxDialog:destroy(Dialog),
-    io:format("12~n"),
-    Res.
+				   end}]), 
+    
+    wxButton:connect(OKBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_OK,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       ParentPid ! {wxCheckBox:isChecked(Check), wxSlider:getValue(Slider)},
+			       wxDialog:destroy(Dialog)
+		       end}]),
+    wxButton:connect(CancelBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_CANCEL,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       ParentPid ! cancel,
+			       wxDialog:destroy(Dialog)
+		       end}]),
+    
+    wxDialog:show(Dialog).
+    
+
+
+line_dialog(ParentFrame, OldLines, Holder) ->
+    Dialog = wxDialog:new(ParentFrame, ?wxID_ANY, "Enter number of lines", 
+			  [{style, ?wxDEFAULT_DIALOG_STYLE bor ?wxRESIZE_BORDER}]),
+    Panel = wxPanel:new(Dialog),
+    TxtCtrl = wxTextCtrl:new(Panel, ?wxID_ANY, [{value, OldLines}]),
+    InnerSz = wxBoxSizer:new(?wxVERTICAL),
+    wxSizer:add(InnerSz, TxtCtrl, [{flag, ?wxEXPAND bor ?wxALL}]),
+    wxPanel:setSizer(Panel, InnerSz),
+
+    OKBtn = wxButton:new(Dialog, ?wxID_OK),
+    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL),
+
+    Buttons = wxStdDialogButtonSizer:new(),
+    wxStdDialogButtonSizer:addButton(Buttons, OKBtn),
+    wxStdDialogButtonSizer:addButton(Buttons, CancelBtn),
+
+    TopSz = wxBoxSizer:new(?wxVERTICAL),
+    wxSizer:add(TopSz, Panel, [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
+    wxSizer:add(TopSz, Buttons, [{flag, ?wxEXPAND}]),
+    wxStdDialogButtonSizer:realize(Buttons),
+    wxWindow:setSizerAndFit(Dialog, TopSz),
+    wxSizer:setSizeHints(TopSz, Dialog),
+
+    wxButton:connect(OKBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_OK,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       try change_lines(list_to_integer(wxTextCtrl:getValue(TxtCtrl))),
+				    refresh_grid(Holder)
+			       catch error:badarg -> ignore 
+			       end,
+			       wxDialog:destroy(Dialog)
+		       end}]),
+    wxButton:connect(CancelBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_CANCEL,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       wxDialog:destroy(Dialog)
+		       end}]),
+    wxDialog:show(Dialog).
+
 
 start_procinfo(Node, Pid, Frame, Opened, View) ->
     case lists:member(Pid, Opened) of
@@ -452,7 +511,7 @@ handle_event(#wx{id = ?ID_NO_OF_LINES, event = #wxCommand{type = command_menu_se
 	     #pro_wx_state{frame = Frame, 
 			   holder = Holder} = State) ->
     OldLines = integer_to_list(get_lines()),
-    create_line_dialog(Frame, OldLines, Holder),
+    line_dialog(Frame, OldLines, Holder),
     {noreply, State};   
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
@@ -463,8 +522,9 @@ handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_select
 
 handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
 	     #pro_wx_state{frame = Frame, refr_timer=Timer0} = State) ->
-    Intv0 = get_intv(),
-    case interval_dialog(Frame, Timer0 /= false, Intv0, 10, 5*60) of
+    Intv0 = get_intv() div 1000,
+    interval_dialog(Frame, self(), Timer0 /= false, Intv0, 10, 5*60),
+    receive
 	cancel ->
 	    {noreply, State};
 	{true, Intv} ->
@@ -611,46 +671,7 @@ handle_event(Event, State) ->
 
 
 
-create_line_dialog(ParentFrame, OldLines, Holder) ->
-    Dialog = wxDialog:new(ParentFrame, ?wxID_ANY, "Enter number of lines", 
-			  [{style, ?wxDEFAULT_DIALOG_STYLE bor ?wxRESIZE_BORDER}]),
-    Panel = wxPanel:new(Dialog),
-    TxtCtrl = wxTextCtrl:new(Panel, ?wxID_ANY, [{value, OldLines}]),
-    InnerSz = wxBoxSizer:new(?wxVERTICAL),
-    wxSizer:add(InnerSz, TxtCtrl, [{flag, ?wxEXPAND bor ?wxALL}]),
-    wxPanel:setSizer(Panel, InnerSz),
 
-    OKBtn = wxButton:new(Dialog, ?wxID_OK),
-    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL),
-    
-    Buttons = wxStdDialogButtonSizer:new(),
-    wxStdDialogButtonSizer:addButton(Buttons, OKBtn),
-    wxStdDialogButtonSizer:addButton(Buttons, CancelBtn),
-    
-    TopSz = wxBoxSizer:new(?wxVERTICAL),
-    wxSizer:add(TopSz, Panel, [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
-    wxSizer:add(TopSz, Buttons, [{flag, ?wxEXPAND}]),
-    wxStdDialogButtonSizer:realize(Buttons),
-    wxWindow:setSizerAndFit(Dialog, TopSz),
-    wxSizer:setSizeHints(TopSz, Dialog),
-
-    wxButton:connect(OKBtn, command_button_clicked, 
-		     [{callback, 
-		       fun(#wx{id = ?wxID_OK,
-			       event = #wxCommand{type = command_button_clicked}},_) ->
-			       try change_lines(list_to_integer(wxTextCtrl:getValue(TxtCtrl))),
-				    refresh_grid(Holder)
-			       catch error:badarg -> ignore 
-			       end,
-			       wxDialog:show(Dialog, [{show, false}])
-		       end}]),
-    wxButton:connect(CancelBtn, command_button_clicked, 
-		     [{callback, 
-		       fun(#wx{id = ?wxID_CANCEL,
-			       event = #wxCommand{type = command_button_clicked}},_) ->
-			       wxDialog:show(Dialog, [{show, false}])
-		       end}]),
-    wxDialog:show(Dialog).
 
 
 
