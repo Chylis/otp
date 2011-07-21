@@ -2,7 +2,7 @@
 
 -behaviour(wx_object).
 
--export([start/4]).
+-export([start/5]).
 
 -export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, 
 	 handle_call/3, handle_info/2]).
@@ -13,13 +13,20 @@
 -define(CLOSE, 1).
 -define(REFRESH, 2).
 -define(SELECT_ALL, 3).
+-define(MODULE_INFO, 4).
+-define(MODULE_CODE, 5).
+-define(PROC_INFO, 6).
 
 -record(procinfo_state, {parent,
 			 frame,
 			 node,
 			 pid,
+			 module,
+			 main_sizer,
+			 checkbox_sizer,
 			 styled_txtctrl,
 			 checklistbox,
+			 current_view, % procinfo::atom | module_info::atom | module_code::atom
 			 itemlist = [{backtrace, false},
 				     {binary, false},
 				     {catchlevel, false},
@@ -48,23 +55,32 @@
 				     {trap_exit,true}]
 			}).
 
-start(Node, Process, ParentFrame, Parent) ->
-    wx_object:start(?MODULE, [Node, Process, ParentFrame, Parent], []).
+
+			    
+
+start(Node, Process, ParentFrame, Parent, View) ->
+    wx_object:start(?MODULE, [Node, Process, ParentFrame, Parent, View], []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init([Node, Process, ParentFrame, Parent]) ->
+init([Node, Process, ParentFrame, Parent, View]) ->
     State = #procinfo_state{parent = Parent,
 			    node = Node,
 			    pid = Process
 			   },
-    {Frame, STC, CheckListBox} = setup(ParentFrame, Node, Process, State#procinfo_state.itemlist),
+    ItemList = generate_itemlist(State, View),
+    {initial_call, {Module, _, _}} = rpc:call(Node, erlang, process_info, [Process, initial_call]),
+    {Frame, STC, CheckListBox, CheckSz, MainSz} = setup(ParentFrame, Node, Process, ItemList, Module, View),
     {Frame, State#procinfo_state{frame = Frame,
+				 module = Module,
 				 styled_txtctrl = STC,
-				 checklistbox = CheckListBox}}.
+				 checklistbox = CheckListBox,
+				 main_sizer = MainSz,
+				 checkbox_sizer = CheckSz,
+				 current_view = View}}.
 
-setup(ParentFrame, Node, Pid, ItemList) ->
-    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Process information", [{size, {900,900}}]),
+setup(ParentFrame, Node, Pid, ItemList, Module, View) ->
+    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Process information: " ++ atom_to_list(Module), [{size, {900,900}}]),
     Panel = wxPanel:new(Frame, []),
     MainSz = wxBoxSizer:new(?wxHORIZONTAL),
     CheckSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, "View"}]),
@@ -72,9 +88,7 @@ setup(ParentFrame, Node, Pid, ItemList) ->
     MenuBar = wxMenuBar:new(),
     create_menues(MenuBar),
     
-    StyledTxtCtrl = create_styled_txtctrl(Panel),
-    wxStyledTextCtrl:setText(StyledTxtCtrl, 
-			     get_formatted_values(Node, Pid, ItemList)),
+    Stc = create_styled_txtctrl(Panel, View),
 
     Choices = [atom_to_list(Tag) || {Tag, _} <- ItemList],
     CheckListBox = wxCheckListBox:new(Panel, ?wxID_ANY, [{choices, Choices},
@@ -91,7 +105,7 @@ setup(ParentFrame, Node, Pid, ItemList) ->
     wxButton:connect(SelAllBtn, command_button_clicked, [{userData, true}]),
     wxButton:connect(DeSelAllBtn, command_button_clicked, [{userData, false}]),
     
-    wxSizer:add(MainSz, StyledTxtCtrl, [{proportion, 1}, {flag, ?wxEXPAND}]),
+    wxSizer:add(MainSz, Stc, [{proportion, 1}, {flag, ?wxEXPAND}]),
     wxSizer:add(CheckSz, CheckListBox, [{proportion, 1}]),
     wxSizer:add(BtnSz, SelAllBtn),
     wxSizer:add(BtnSz, DeSelAllBtn),
@@ -103,13 +117,34 @@ setup(ParentFrame, Node, Pid, ItemList) ->
     wxFrame:show(Frame),
     wxFrame:connect(Frame, close_window),
     wxMenu:connect(Frame, command_menu_selected),
-    {Frame, StyledTxtCtrl, CheckListBox}.
+    
+    case View of
+	procinfo ->
+	    load_procinfo_page(Stc, CheckSz, MainSz, Node, Pid, ItemList);
+	module_info ->
+	    load_modinfo_page(Stc, CheckSz, MainSz, Module);
+	module_code ->
+	    load_modcode_page(Stc, CheckSz, MainSz, Module)
+    end,
+    {Frame, Stc, CheckListBox, CheckSz, MainSz}.
+
+generate_itemlist(State, procinfo) ->
+    State#procinfo_state.itemlist;
+generate_itemlist(State, _) ->
+    lists:keymap(fun(_) -> false end, 2, State#procinfo_state.itemlist).
 
 create_menues(MenuBar) ->
     observer_wx:create_menu(
       [
        {"File", [#create_menu{id = ?CLOSE, text = "Close"}]},
-       {"View", [#create_menu{id = ?REFRESH, text = "Refresh"}]}
+       {"View", [#create_menu{id = ?PROC_INFO, text = "Process info",
+			     type = radio},
+		 #create_menu{id = ?MODULE_INFO, text = "Module info",
+			     type = radio},
+		 #create_menu{id = ?MODULE_CODE, text = "Module code",
+			     type = radio},
+		 separator,
+		 #create_menu{id = ?REFRESH, text = "Refresh"}]}
       ],
       MenuBar).
 	
@@ -125,13 +160,16 @@ check_boxes(CheckListBox, ItemList) ->
 		end,
 		0, ItemList).
 
-create_styled_txtctrl(Parent) ->
-    FixedFont = wxFont:new(12, ?wxFONTFAMILY_TELETYPE, ?wxFONTSTYLE_NORMAL, ?wxNORMAL,[]),
+create_styled_txtctrl(Parent, View) ->
+    FixedFont = wxFont:new(11, ?wxFONTFAMILY_TELETYPE, ?wxFONTSTYLE_NORMAL, ?wxNORMAL,[]),
     Stc = wxStyledTextCtrl:new(Parent),
     wxStyledTextCtrl:styleClearAll(Stc),
     wxStyledTextCtrl:styleSetFont(Stc, ?wxSTC_STYLE_DEFAULT, FixedFont),
     wxStyledTextCtrl:setLexer(Stc, ?wxSTC_LEX_ERLANG),
-    wxStyledTextCtrl:setMarginType(Stc, 1, ?wxSTC_MARGIN_NUMBER),
+    wxStyledTextCtrl:setMarginType(Stc, 2, ?wxSTC_MARGIN_NUMBER),
+    W = wxStyledTextCtrl:textWidth(Stc, ?wxSTC_STYLE_LINENUMBER, "9"),
+    wxStyledTextCtrl:setMarginWidth(Stc, 2, W*3),
+    
     wxStyledTextCtrl:setSelectionMode(Stc, ?wxSTC_SEL_LINES),
     wxStyledTextCtrl:setUseHorizontalScrollBar(Stc, false),
     
@@ -154,10 +192,24 @@ create_styled_txtctrl(Parent) ->
 		       wxStyledTextCtrl:styleSetForeground(Stc, Style, Color)
 	       end,
     [SetStyle(Style) || Style <- Styles],
-    wxStyledTextCtrl:setKeyWords(Stc, 0, keyWords()),
+    
+    KeyWords = case View of
+		   procinfo ->
+		       get_procinfo_keywords();
+		   module_info ->
+		       get_modinfo_keywords();
+		   module_code ->
+		       get_erl_keywords()
+	       end,
+    wxStyledTextCtrl:setKeyWords(Stc, 0, KeyWords),
     Stc.
 
-keyWords() ->
+get_erl_keywords() ->
+    L = ["after","begin","case","try","cond","catch","andalso","orelse",
+	 "end","fun","if","let","of","query","receive","when","bnot","not",
+	 "div","rem","band","and","bor","bxor","bsl","bsr","or","xor"],
+    lists:flatten([K ++ " "|| K <- L] ++ [0]).	
+get_procinfo_keywords() ->
     L = ["backtrace","binary","catchlevel","current_function","dictionary",
 	 "error_handler","garbage_collection","group_leader", "heap_size",
 	 "initial_call","last_calls","links","memory","message_queue_len",
@@ -165,12 +217,72 @@ keyWords() ->
 	 "sequential_trace_token","stack_size","status","suspending",
 	 "total_heap_size","trace","trap_exit"],
     lists:flatten([K ++ " "|| K <- L] ++ [0]).
+get_modinfo_keywords() ->
+    L = ["exports", "imports", "attributes", "compile"],
+    lists:flatten([K ++ " "|| K <- L] ++ [0]).
 
 get_formatted_values(Node, Process, ItemList) ->
     TagList = [Tag || {Tag, Bool} <- ItemList, Bool =:= true],
     Values = rpc:call(Node, erlang, process_info, [Process, TagList]),
-    lists:flatten(io_lib:format("~p", [Values])).
+    lists:flatten([io_lib:format("~p~n", [V]) || V <- Values]).
+
+get_formatted_modinfo(Module) ->
+    Info = Module:module_info(),
+    lists:flatten([io_lib:format("~p~n", [I]) || I <- Info]).
+
+get_src_file(Module) ->
+    case filename:find_src(Module) of
+        {error, {Reason, Mod}} ->
+	    io:format("find src reason: ~p~n module: ~p~n", [Reason, Mod]),
+            {error, error};
+        {SrcFile, _} ->
+            case file:read_file_info(SrcFile ++ ".erl") of
+                {error, Reason} ->
+		    io:format("read file info reason: ~p~n", [Reason]),
+                    {error, error};
+                {ok, _} ->
+                    {ok, SrcFile ++ ".erl"}
+            end
+    end.
+
+
+set_text(Stc, Text, text) ->
+    wxStyledTextCtrl:setReadOnly(Stc, false),
+    wxStyledTextCtrl:setText(Stc, Text),
+    wxStyledTextCtrl:setReadOnly(Stc, true);
+set_text(Stc, File, file) ->
+    wxStyledTextCtrl:setReadOnly(Stc, false),
+    wxStyledTextCtrl:loadFile(Stc, File),
+    wxStyledTextCtrl:setReadOnly(Stc, true).
     
+load_procinfo_page(Stc, CheckSz, MainSz, Node, Process, ItemList) ->
+    show_check_sizer(CheckSz, MainSz, true),
+    wxStyledTextCtrl:setKeyWords(Stc, 0, get_procinfo_keywords()),
+    Txt = get_formatted_values(Node, Process, ItemList),
+    set_text(Stc, Txt, text).
+load_modinfo_page(Stc, CheckSz, MainSz, Module) ->
+    show_check_sizer(CheckSz, MainSz, false),
+    wxStyledTextCtrl:setKeyWords(Stc, 0, get_modinfo_keywords()),
+    Txt = get_formatted_modinfo(Module),
+    set_text(Stc, Txt, text).
+load_modcode_page(Stc, CheckSz, MainSz, Module) ->
+    show_check_sizer(CheckSz, MainSz, false),
+    wxStyledTextCtrl:setKeyWords(Stc, 0, get_erl_keywords()),
+    case get_src_file(Module) of
+	{ok, File} ->
+	    set_text(Stc, File, file);
+	{error, _}->
+	    set_text(Stc, "Error! Could not read sourcefile", text)
+    end.
+
+
+show_check_sizer(CheckSz, MainSz, Show) when is_boolean(Show) ->
+    case wxSizer:isShown(CheckSz, 0) of
+	Show -> ok;
+	_ ->
+	    wxSizer:show(CheckSz, Show),
+	    wxSizer:layout(MainSz)
+    end.
     
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Callbacks%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 handle_event(#wx{event = #wxClose{type = close_window}},
@@ -188,19 +300,74 @@ handle_event(#wx{id = ?CLOSE,
 
 handle_event(#wx{id = ?REFRESH, 
 		 event = #wxCommand{type = command_menu_selected}},
-	     #procinfo_state{styled_txtctrl = Stc,
+	     #procinfo_state{current_view = View,
+			     styled_txtctrl = Stc,
+			     node = Node,
+			     pid = Process,
+			     itemlist = ItemList} = State) when View =:= procinfo ->
+    Text = get_formatted_values(Node, Process, ItemList),
+    set_text(Stc, Text, text),
+    {noreply, State};
+
+handle_event(#wx{id = ?REFRESH, 
+		event = #wxCommand{type = command_menu_selected}},
+	    #procinfo_state{current_view = View,
+			    styled_txtctrl = Stc,
+			    module = Module} = State) when View =:= module_info ->
+    Text = get_formatted_modinfo(Module),
+    set_text(Stc, Text, text),
+    {noreply, State};
+
+handle_event(#wx{id = ?REFRESH, 
+		 event = #wxCommand{type = command_menu_selected}},
+	     #procinfo_state{current_view = View,
+			     styled_txtctrl = Stc,
+			     module = Module} = State) when View =:= module_code ->
+    case get_src_file(Module) of
+	{ok, File} ->
+	    set_text(Stc, File, file);
+	{error, _} ->
+	    set_text(Stc, "Error! Could not read sourcefile", text)
+    end,
+    {noreply, State};
+
+
+handle_event(#wx{id = ?PROC_INFO, 
+		 event = #wxCommand{type = command_menu_selected}},
+	     #procinfo_state{checkbox_sizer = CheckSz,
+			     main_sizer = MainSz,
+			     styled_txtctrl = Stc,
 			     node = Node,
 			     pid = Process,
 			     itemlist = ItemList} = State) ->
-    wxStyledTextCtrl:setText(Stc, get_formatted_values(Node, Process, ItemList)),
-    {noreply, State};
+    load_procinfo_page(Stc, CheckSz, MainSz, Node, Process, ItemList),
+    {noreply, State#procinfo_state{current_view = procinfo}};
+
+
+handle_event(#wx{id = ?MODULE_INFO, 
+		 event = #wxCommand{type = command_menu_selected}},
+	     #procinfo_state{main_sizer = MainSz,
+			     checkbox_sizer = CheckSz,
+			     styled_txtctrl = Stc,
+			     module = Module} = State) ->
+    load_modinfo_page(Stc, CheckSz, MainSz, Module),
+    {noreply, State#procinfo_state{current_view = module_info}};
+
+handle_event(#wx{id = ?MODULE_CODE, 
+		 event = #wxCommand{type = command_menu_selected}},
+	     #procinfo_state{main_sizer = MainSz,
+			     checkbox_sizer = CheckSz,
+			     styled_txtctrl = Stc,
+			     module = Module} = State) ->
+    load_modcode_page(Stc, CheckSz, MainSz, Module),
+    {noreply, State#procinfo_state{current_view = module_code}};
 
 handle_event(#wx{event = #wxCommand{type = command_checklistbox_toggled,
 				    commandInt = Index},
 		 obj = CheckListbox},
 	     #procinfo_state{node = Node,
 			     pid = Process,
-			     styled_txtctrl = STC,
+			     styled_txtctrl = Stc,
 			     itemlist = ItemList} = State) ->
     {Tag, _} = lists:nth(Index+1, ItemList),
     ItemList2 = case wxCheckListBox:isChecked(CheckListbox, Index) of
@@ -209,8 +376,8 @@ handle_event(#wx{event = #wxCommand{type = command_checklistbox_toggled,
 		    false ->
 			lists:keyreplace(Tag, 1, ItemList, {Tag, false})
 		end,
-    StyledProcInfo = get_formatted_values(Node, Process, ItemList2),
-    wxStyledTextCtrl:setText(STC, StyledProcInfo),
+    Txt = get_formatted_values(Node, Process, ItemList2),
+    set_text(Stc, Txt, text),
     {noreply, State#procinfo_state{itemlist = ItemList2}};
 
 handle_event(#wx{id = ?SELECT_ALL,
@@ -226,7 +393,8 @@ handle_event(#wx{id = ?SELECT_ALL,
 				     Bool
 			     end,
 			     2, ItemList),
-    wxStyledTextCtrl:setText(Stc, get_formatted_values(Node, Process, ItemList2)),
+    Txt = get_formatted_values(Node, Process, ItemList2),
+    set_text(Stc, Txt, text),
     {noreply, State#procinfo_state{itemlist = ItemList2}};
     
 

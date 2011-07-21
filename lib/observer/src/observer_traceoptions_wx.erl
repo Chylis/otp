@@ -1,7 +1,7 @@
 -module(observer_traceoptions_wx).
 
 -include_lib("wx/include/wx.hrl").
--include("erltop_defs.hrl").
+-include("observer_defs.hrl").
 
 -export([start/6]).
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
@@ -31,15 +31,6 @@
 
 -record(boxes, {send, 'receive', functions, events,
 		on_spawn, on_link, all_spawn, all_link}).
-
--record(match_spec, {alias,
-		     term_ms = [],
-		     str_ms = [],
-		     fun2ms}).
-
--record(traced_func, {func_name, %atom
-		      arity, %integer
-		      match_spec = #match_spec{}}). % #match_spec
 
 -define(TRACEOPTS_FRAME, 9).
 

@@ -97,7 +97,9 @@ create_menues(MenuBar) ->
        {"File", [
 		 #create_menu{id = ?LOAD_TRACEOPTS, text = "Load settings"},
 		 #create_menu{id = ?SAVE_TRACEOPTS, text = "Save settings"},
+		 separator,
 		 #create_menu{id = ?SAVE_BUFFER, text = "Save buffer"},
+		 separator,
 		 #create_menu{id = ?CLOSE, text = "Close"}
 		]},
        {"View", [
@@ -140,7 +142,7 @@ handle_event(#wx{id = ?CLEAR, event = #wxCommand{type = command_menu_selected}},
 
 handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selected}}, 
 	     #state{frame = Frame, text_ctrl = TxtCtrl} = State) ->
-    Dialog = wxFileDialog:new(Frame, [{style, ?wxFD_SAVE}]),
+    Dialog = wxFileDialog:new(Frame, [{style, ?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
     case wxFileDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(Dialog),
@@ -160,7 +162,7 @@ handle_event(#wx{id = ?SAVE_TRACEOPTS,
 	     #state{frame = Frame,
 		    trace_options = TraceOpts,
 		    match_specs = MatchSpecs} = State) ->
-    Dialog = wxFileDialog:new(Frame, [{style, ?wxFD_SAVE}]),
+    Dialog = wxFileDialog:new(Frame, [{style, ?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}]),
     case wxFileDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(Dialog),

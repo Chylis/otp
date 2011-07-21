@@ -24,15 +24,13 @@
 %% wx_object callbacks
 -export([init/1, handle_info/2, terminate/2, code_change/3, handle_call/3,
 	 handle_event/2, handle_cast/2, to_str/1]).
+-export([get_row/5, get_attr/3]).
 
 -include_lib("wx/include/wx.hrl").
 -include_lib("runtime_tools/include/observer_backend.hrl").
-
 -include("observer_defs.hrl").
 
 %% Defines
--define(OBS_PRO, etop).
-
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
 -define(COL_MEM, 2).
@@ -50,12 +48,10 @@
 -define(ID_TRACEMENU, 206).
 -define(ID_TRACE_ALL_MENU, 207).
 -define(ID_TRACE_NEW_MENU, 208).
--define(ID_OPTIONS, 209).
--define(ID_SAVE_OPT, 210).
+-define(ID_NO_OF_LINES, 209).
 -define(ID_MODULE_INFO, 211).
--define(OK, 212).
--define(ID_SYSHIDE, 213).
--define(ID_HIDENEW, 214).
+-define(ID_SYSHIDE, 213). %% ej implementerat
+-define(ID_HIDENEW, 214). %% ej implementerat
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -74,17 +70,11 @@
 		       frame,
 		       parent_notebook,
 		       trace_options = #trace_options{},
-		       match_specs = [], %%fixa
-		       options_pid, %%onödig?
-		       opened = [], %%onödig?
-		       process_info_settings, %%onödig
+		       match_specs = [],
 		       refr_timer = false,
-		       hide_system, %%onödig?
-		       hide_modules, %%onödig?
-		       hide_pids,%%onödig?
 		       tracemenu_opened,
 		       procinfo_menu_pids = [],
-		       node = node(),
+		       selected_pid,
 		       sort_order = {#etop_proc_info.reds, decr},
 		       holder}).
 
@@ -94,7 +84,6 @@ start_link(Notebook, Parent) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 init([Notebook, Parent]) ->
-    process_flag(trap_exit, true),
     Config = etop:start(self()),
     Info = etop:update(Config),
     Attrs = create_attrs(),
@@ -107,6 +96,7 @@ init([Notebook, Parent]) ->
 						  SortOrder
 						 )
 			end),
+    
     Count = length(Info#etop_info.procinfo),
     {ProPanel, State} = setup(Notebook, Parent, Holder, Count),
     refresh_grid(Holder),
@@ -124,23 +114,12 @@ setup(Notebook, Parent, Holder, Count) ->
 			      {border,4}]),
     
     wxWindow:setSizer(ProPanel, Sizer),
-       
-    ProcessInfo = [ 
-		    error_handler,
-		    garbage_collection,
-		    group_leader,
-		    heap_size,
-		    links,
-		    priority,
-		    trap_exit,
-		    message_queue_len],
-    
+
     State =  #pro_wx_state{parent = Parent,
 			   popup_menu  = Menu,
 			   grid        = Grid,
 			   frame       = ProPanel,
 			   parent_notebook = Notebook,
-			   process_info_settings = ProcessInfo,
 			   tracemenu_opened = false,
 			   holder = Holder}, 
     {ProPanel, State}.
@@ -174,16 +153,18 @@ generate_matchspecs() ->
 
 create_pro_menu(Parent) ->
     MenuEntries = [{"View",
-		    [#create_menu{id = ?ID_REFRESH, text = "Refresh"},
-		     #create_menu{id = ?ID_SYSHIDE, text = "Hide system processes"},
-		     #create_menu{id = ?ID_HIDENEW, text = "Auto-hide new"}]},
-		   {"Options",
-		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"},
+		    [#create_menu{id = ?ID_SYSHIDE, text = "Hide system processes"},
+		     #create_menu{id = ?ID_HIDENEW, text = "Auto-hide new"},
+		     separator,
+		     #create_menu{id = ?ID_REFRESH, text = "Refresh"},
 		     #create_menu{id = ?ID_REFRESH_INTERVAL, text = "Refresh Interval"}]},
+		   {"Options",
+		    [#create_menu{id = ?ID_NO_OF_LINES, text = "Number of lines"},
+		     #create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"}]},
 		   {"Trace",
 		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
-		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"},
-		     #create_menu{id = ?ID_TRACE_NEW_MENU, text = "Trace new processes"}]}
+		     #create_menu{id = ?ID_TRACE_NEW_MENU, text = "Trace new processes"},
+		     #create_menu{id = ?ID_TRACE_ALL_MENU, text = "Trace all processes"}]}
 		  ],
     observer_wx:create_menus(Parent, MenuEntries).
 
@@ -237,11 +218,29 @@ create_list_box(Panel, Holder, Count) ->
     ListCtrl.
 
 
+
 change_node(Node) ->
     etop_server ! {config, {node, Node}}.
+
+get_node() ->
+    etop_server ! {get_node, self()},
+    receive
+	{node, Node} ->
+	    Node
+    end.
     
-refresh_grid(Holder) ->
-    etop_server ! {update, Holder}.
+change_lines(Int) when is_integer(Int) ->
+    etop_server ! {config, {lines, Int}}.
+
+get_lines() ->
+    etop_server ! {get_lines, self()},
+    receive
+	{lines, Lines} ->
+	    Lines
+    end.
+
+change_intv(NewIntv) ->
+    etop_server ! {config, {intverval, NewIntv}}.
 
 get_intv() ->
     etop_server ! {get_intv, self()},
@@ -250,34 +249,9 @@ get_intv() ->
 	    Intv
     end.
 
-update_intv(NewIntv) ->
-    etop_server ! {config, {intverval, NewIntv}}.
-   			   
-lookup_pid(ProcInfo, Pid) ->
-    [Ret] = lists:filter(fun(#etop_proc_info{pid = Pid2}) ->
-				 Pid =:= Pid2
-			 end,
-			 ProcInfo),
-    Ret.
-
-module_code(Module) ->
-    case filename:find_src(Module) of
-        {error, _} ->
-            no_code;
-        {CodeSrc, _} ->
-            case file:read_file_info(CodeSrc ++ ".erl") of
-                {error, _} -> 
-                    no_code;
-                _ ->
-                    {src, CodeSrc ++ ".erl"}
-            end
-    end.
-
-create_code_frame(Parent) ->
-    Frame = wxFrame:new(Parent, ?wxID_ANY, "View"),
-    TxtCtrl = wxTextCtrl:new(Frame, ?wxID_ANY, 
-			     [{style,?wxTE_READONLY bor ?wxTE_MULTILINE}]),
-    {Frame, TxtCtrl}.
+refresh_grid(Holder) ->
+    io:format("Refreshing~n"),
+    etop_server ! {update, Holder}.
 
 update_sort_order(Col, 
 		  #pro_wx_state{sort_order = {Sort,Dir}} = State) ->
@@ -297,19 +271,6 @@ map_sort_order(Col) ->
 	?COL_MSG  -> #etop_proc_info.mq;
 	?COL_FUN  -> #etop_proc_info.cf
     end.
-
-opt_warning(Pid, Reason) ->
-    case Reason of
-	normal ->
-	    ok;
-	shutdown ->
-	    ok;
-	Bad ->
-	    error_logger:format("~p~p: received: ~p\n",
-				[?MODULE, self(), {'EXIT', Pid, Bad}])
-    end.
-
-
 
 to_str(Value) when is_atom(Value) ->
     atom_to_list(Value);
@@ -374,15 +335,26 @@ interval_dialog(Parent, Enabled, Value, Min, Max) ->
 					   Enable = Enable0 > 0,
 					   wxWindow:enable(Slider, [{enable, Enable}])
 				   end}]),
+    io:format("10~n"), 
     Res = case wxDialog:showModal(Dialog) of
-	      ?wxID_OK ->
-		  {wxCheckBox:isChecked(Check), wxSlider:getValue(Slider)};
-	      ?wxID_CANCEL ->
-		  cancel
-	  end,
+    	      ?wxID_OK ->
+    		  {wxCheckBox:isChecked(Check), wxSlider:getValue(Slider)};
+    	      ?wxID_CANCEL ->
+    		  cancel
+    	  end,
+    io:format("11~n"),
     wxDialog:destroy(Dialog),
+    io:format("12~n"),
     Res.
 
+start_procinfo(Node, Pid, Frame, Opened, View) ->
+    case lists:member(Pid, Opened) of
+	true ->
+	    Opened;
+	false ->
+	    observer_procinfo:start(Node, Pid, Frame, self(), View),
+	    [Pid | Opened]
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -402,45 +374,41 @@ handle_info({tracemenu_closed, TraceOpts, MatchSpecs}, State) -> %When tracemenu
 				 match_specs = MatchSpecs}};
 
 handle_info({procinfo_menu_closed, Pid}, 
-	    #pro_wx_state{procinfo_menu_pids = MenuPids} = State) ->
-    NewPids = lists:delete(Pid, MenuPids),
+	    #pro_wx_state{procinfo_menu_pids = Opened} = State) ->
+    NewPids = lists:delete(Pid, Opened),
     {noreply, State#pro_wx_state{procinfo_menu_pids = NewPids}};
 
-%% handle_info({checked, Opt, ProcessInfo, Interval}, State) -> %från opts
-%%     State2 = State#pro_wx_state{trace_options = Opt,
-%% 				process_info_settings  = ProcessInfo,
-%% 				interval = Interval},
-    %% {noreply, State2};
-
-%% handle_info({save, File}, State) -> %från options
-%%     State#pro_wx_state.parent ! {statusbar, "Options saved: " ++ File},
-%%     {noreply, State};
-
 handle_info({active, Node}, #pro_wx_state{holder = Holder,
+					  refr_timer = Timer0,
 					  parent = Parent} = State) ->
     create_pro_menu(Parent),
     change_node(Node),
     refresh_grid(Holder),
-    {noreply, State#pro_wx_state{node = Node}};
+    Timer = case Timer0 of
+		true ->
+		    Intv = get_intv(),
+		    {ok, Ref} = timer:send_interval(Intv*1000, refresh_interval),
+		    Ref;
+		false ->
+		    false
+	    end,
+    {noreply, State#pro_wx_state{refr_timer = Timer}};
 
-handle_info({'EXIT', Pid, Reason}, State) when Pid =:= State#pro_wx_state.options_pid ->
-    opt_warning(Pid, Reason),
-    {noreply, State#pro_wx_state{options_pid = undefined}};
-
-handle_info({'EXIT', Pid, Reason}, State) ->
-    opt_warning(Pid, Reason),
-    case lists:keysearch(Pid, #pid.window, State#pro_wx_state.opened) of
-	{value, Tuple} ->
-	    Opened = lists:delete(Tuple, State#pro_wx_state.opened),
-	    {noreply, State#pro_wx_state{opened = Opened}};
-	false ->
-	    {noreply, State}
-    end;
+handle_info(not_active, #pro_wx_state{refr_timer = Timer0} = State) ->
+    Timer = case Timer0 of
+		false -> false;
+		true -> true;
+		Timer0 ->
+		    timer:cancel(Timer0),
+		    true
+	    end,
+    
+    {noreply, State#pro_wx_state{refr_timer=Timer}};
 
 handle_info({node, Node}, #pro_wx_state{holder = Holder} = State) ->
     change_node(Node),
     refresh_grid(Holder),
-    {noreply, State#pro_wx_state{node = Node}};
+    {noreply, State};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -479,21 +447,13 @@ handle_cast(Msg, State) ->
 %%     end,
 %%     {noreply, State};
 
-%% handle_event(#wx{id = ?ID_OPTIONS}, #pro_wx_state{trace_options = Options} = State) -> %%Fixa
-%%     io:format("~p:~p, Klickade options~n", [?MODULE, ?LINE]),
-%%     io:format("Options_pid: ~p~n", [State#pro_wx_state.options_pid]),
-%%     case State#pro_wx_state.options_pid of
-%% 	undefined ->
-%% 	    Pid = erltop_options:start(Options,
-%% 				       State#pro_wx_state.process_info_settings,
-%% 				       State#pro_wx_state.interval,
-%% 				       self()),
-%% 	    io:format("Options: ~p~n, Process_info: ~p~n, Interval: ~p~n",
-%% 		      [Options, State#pro_wx_state.process_info_settings, State#pro_wx_state.interval]),
-%% 	    {noreply, State#pro_wx_state{options_pid = Pid}};
-%% 	_ ->
-%% 	    {noreply, State}
-%%     end;
+
+handle_event(#wx{id = ?ID_NO_OF_LINES, event = #wxCommand{type = command_menu_selected}}, 
+	     #pro_wx_state{frame = Frame, 
+			   holder = Holder} = State) ->
+    OldLines = integer_to_list(get_lines()),
+    create_line_dialog(Frame, OldLines, Holder),
+    {noreply, State};   
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
 	     #pro_wx_state{holder = Holder} = State) ->
@@ -512,7 +472,7 @@ handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
 		false -> ok;
 		_ -> timer:cancel(Timer0)
 	    end,
-	    update_intv(Intv),
+	    change_intv(Intv),
 	    {ok, Timer} = timer:send_interval(Intv * 1000, refresh_interval),
 	    {noreply, State#pro_wx_state{refr_timer=Timer}};
 	{false, _} ->
@@ -523,68 +483,38 @@ handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
 	    {noreply, State#pro_wx_state{refr_timer=false}}
     end;
 
-%% handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{selected = Sel} = State) ->
-%%     case Sel of
-%% 	undefined -> ignore;
-%%  	_ -> exit(State#pro_wx_state.selected, kill)
-%%     end,
-%%     {noreply, State};
+handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{selected_pid = SelPid} = State) ->
+    case SelPid of
+	undefined -> ignore;
+ 	Pid when is_pid(Pid) -> exit(SelPid, kill)
+    end,
+    {noreply, State#pro_wx_state{selected_pid = undefined}};
 
-%% handle_event(#wx{id = ?ID_MODULE_INFO, 
-%% 		 event = #wxCommand{type = command_menu_selected}}, 
-%% 	     #pro_wx_state{node = Node, selected = Sel} = State)  ->
-%%     erltop_process:module_info_window(Node, Sel), %%%%%%% erltop process byt namn
-%%     {noreply, State};
+handle_event(#wx{id = ?ID_MODULE_INFO, 
+		 event = #wxCommand{type = command_menu_selected}}, 
+	     #pro_wx_state{frame = Frame,
+			   selected_pid = Pid,
+			   procinfo_menu_pids = Opened} = State)  ->
+    Node = get_node(),
+    Opened2 = start_procinfo(Node, Pid, Frame, Opened, module_info),
+    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
 
-%% handle_event(#wx{id = ?ID_VIEW} = Event,
-%% 	     #pro_wx_state{holder = Holder,
-%% 			   selected = Sel} = State) ->
-%%     Holder ! {get_info, self()},
-%%     Info = receive
-%% 	       I ->
-%% 		   I
-%% 	   end,
-%%     io:format("Event: ~p~n", [Event]),
-%%     #etop_proc_info{cf = {M,_,_}} = lookup_pid(Info, Sel),
-%%     case module_code(M) of
-%% 	no_code ->     ok;
-%% 	{src, File} ->
-%% 	    {CodeFrame, CodeView} = create_code_frame(State#pro_wx_state.frame),
-%% 	    wxTextCtrl:loadFile(CodeView, File),
-%% 	    FileName = filename:basename(File),
-%% 	    wxFrame:setTitle(CodeFrame, "Viewing: " ++ FileName),
-%% 	    wxFrame:show(CodeFrame)
-%%     end,
-%%     {noreply, State};
-
-%% handle_event(#wx{id = ?ID_PROC}, 
-%% 	     #pro_wx_state{node = Node,
-%% 			   opened = Opened,
-%% 			   selected = Sel,
-%% 			   process_info_settings = PI,
-%% 			   trace_options = Opts} = State) ->
+handle_event(#wx{id = ?ID_PROC}, 
+	     #pro_wx_state{frame = Frame,
+			   selected_pid = Pid,
+			   procinfo_menu_pids = Opened} = State) ->
+    Node = get_node(),
+    Opened2 = start_procinfo(Node, Pid, Frame, Opened, procinfo),
+    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
     
-%%     case lists:keysearch(Sel, #pid.traced, Opened) of
-%% 	false ->
-%% 	    Pid = erltop_process:start(Sel, Opts,
-%% 				       PI, Node,
-%% 				       self()),
-%% 	    {noreply, 
-%% 	     State#pro_wx_state{opened = [#pid{traced = State#pro_wx_state.selected,window = Pid} 
-%% 					  | State#pro_wx_state.opened]}};
-%% 	{value, _Tuple} ->
-%% 	    io:format("Already open\n", []),
-%% 	    {noreply, State}
-%%     end;
-
 handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_selected}}, 
-	     #pro_wx_state{node = Node,
-			   trace_options = Options,
+	     #pro_wx_state{trace_options = Options,
 			   match_specs = MatchSpecs,
 			   holder = Holder,
 			   grid = Grid,
 			   tracemenu_opened = false, 
 			   frame = Frame} = State) ->
+    Node = get_node(),
     IndexList = get_selected_items(Grid),
     PidList = get_selected_pids(Holder, IndexList),
     observer_trace_wx:start(Node,
@@ -596,12 +526,11 @@ handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_sele
     {noreply,  State#pro_wx_state{tracemenu_opened = true}};
 
 handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu_selected}},
-	     #pro_wx_state{node = Node,
-			   trace_options = Options,
+	     #pro_wx_state{trace_options = Options,
 			   match_specs = MatchSpecs,
 			   tracemenu_opened = false,
 			   frame = Frame} = State) ->
-
+    Node = get_node(),
     observer_trace_wx:start(Node,
 			    all,
 			    Options,
@@ -612,12 +541,11 @@ handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu
 
 
 handle_event(#wx{id = ?ID_TRACE_NEW_MENU, event = #wxCommand{type = command_menu_selected}},
-	     #pro_wx_state{node = Node,
-			   trace_options = Options,
+	     #pro_wx_state{trace_options = Options,
 			   match_specs = MatchSpecs,
 			   tracemenu_opened = false,
 			   frame = Frame} = State) ->
-    
+    Node = get_node(),
     observer_trace_wx:start(Node,
 			    new,
 			    Options,
@@ -642,10 +570,11 @@ handle_event(#wx{event=#wxSize{size={W,_}}},
 %% handle_event(#wx{event = #wxList{type = command_list_item_right_click, 
 %% 				 itemIndex = Row}}, 
 %% 	     #pro_wx_state{grid = Grid,
+%% 			   holder = Holder,
 %% 			   popup_menu = PopupMenu} = State) -> %Row selected
-%%     Pid = wxListCtrl:getItemText(Grid, Row),
+%%     Pid = get_row(Holder, Row, pid),
 %%     wxWindow:popupMenu(Grid, PopupMenu, []),
-%%     {noreply, State#pro_wx_state{selected = list_to_pid(Pid)}};
+%%     {noreply, State#pro_wx_state{selected_pid = Pid}};
 
 handle_event(#wx{event = #wxList{type = command_list_item_selected,
 				 itemIndex = Row}}, 
@@ -653,7 +582,6 @@ handle_event(#wx{event = #wxList{type = command_list_item_selected,
     ProcInfo = get_row(Holder, Row, all),
     Str = lists:flatten(io_lib:format("~p", [ProcInfo])),
     io:format("List item selected ~p~n", [Str]),
-    %%{noreply, State#pro_wx_state{selected = list_to_pid(Pid)}};
     {noreply, State};
 
 handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}}, 
@@ -667,17 +595,12 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated,
 				 itemIndex = Row}}, 
 	     #pro_wx_state{frame = Frame,
 			   holder = Holder,
-			   node = Node,
-			   procinfo_menu_pids= MenuPids} = State) ->
-    SelectedPid = get_row(Holder, Row, pid),
-    case lists:member(SelectedPid, MenuPids) of
-	true ->
-	    {noreply, State};
-	false ->
-	    observer_procinfo:start(Node, SelectedPid, Frame, self()),
-	    {noreply, State#pro_wx_state{procinfo_menu_pids = [SelectedPid | MenuPids]}}
-    end;
-
+			   procinfo_menu_pids= Opened} = State) ->
+    Node = get_node(),
+    Pid = get_row(Holder, Row, pid),
+    Opened2 = start_procinfo(Node, Pid, Frame, Opened, procinfo),
+    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
+	
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
     {noreply, State}.
@@ -688,6 +611,46 @@ handle_event(Event, State) ->
 
 
 
+create_line_dialog(ParentFrame, OldLines, Holder) ->
+    Dialog = wxDialog:new(ParentFrame, ?wxID_ANY, "Enter number of lines", 
+			  [{style, ?wxDEFAULT_DIALOG_STYLE bor ?wxRESIZE_BORDER}]),
+    Panel = wxPanel:new(Dialog),
+    TxtCtrl = wxTextCtrl:new(Panel, ?wxID_ANY, [{value, OldLines}]),
+    InnerSz = wxBoxSizer:new(?wxVERTICAL),
+    wxSizer:add(InnerSz, TxtCtrl, [{flag, ?wxEXPAND bor ?wxALL}]),
+    wxPanel:setSizer(Panel, InnerSz),
+
+    OKBtn = wxButton:new(Dialog, ?wxID_OK),
+    CancelBtn = wxButton:new(Dialog, ?wxID_CANCEL),
+    
+    Buttons = wxStdDialogButtonSizer:new(),
+    wxStdDialogButtonSizer:addButton(Buttons, OKBtn),
+    wxStdDialogButtonSizer:addButton(Buttons, CancelBtn),
+    
+    TopSz = wxBoxSizer:new(?wxVERTICAL),
+    wxSizer:add(TopSz, Panel, [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
+    wxSizer:add(TopSz, Buttons, [{flag, ?wxEXPAND}]),
+    wxStdDialogButtonSizer:realize(Buttons),
+    wxWindow:setSizerAndFit(Dialog, TopSz),
+    wxSizer:setSizeHints(TopSz, Dialog),
+
+    wxButton:connect(OKBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_OK,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       try change_lines(list_to_integer(wxTextCtrl:getValue(TxtCtrl))),
+				    refresh_grid(Holder)
+			       catch error:badarg -> ignore 
+			       end,
+			       wxDialog:show(Dialog, [{show, false}])
+		       end}]),
+    wxButton:connect(CancelBtn, command_button_clicked, 
+		     [{callback, 
+		       fun(#wx{id = ?wxID_CANCEL,
+			       event = #wxCommand{type = command_button_clicked}},_) ->
+			       wxDialog:show(Dialog, [{show, false}])
+		       end}]),
+    wxDialog:show(Dialog).
 
 
 
@@ -803,8 +766,13 @@ get_row(From, Row, pid, Info, {Sort, Dir}) ->
     From ! {self(), Pid};
 get_row(From, Row, Col, Info, {Sort, Dir}) ->
     SortedInfo = sort_procinfo(Info, Sort, Dir),
-    ProcInfo = lists:nth(Row+1, SortedInfo),
-    Data = get_procinfo_data(Col, ProcInfo),
+    Data = case Row+1 > length(SortedInfo) of
+	       true ->
+		   null;
+	       false ->
+		   ProcInfo = lists:nth(Row+1, SortedInfo),
+		   get_procinfo_data(Col, ProcInfo)
+	   end,
     From ! {self(), io_lib:format("~p", [Data])}.
 
 get_attr(From, Row, Attrs) ->
