@@ -447,15 +447,17 @@ start_procinfo(Node, Pid, Frame, Opened, View) ->
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-handle_info({'DOWN', Ref, _, _, Info}, 
+handle_info({'DOWN', Ref, _, _, _}, 
 	    #pro_wx_state{holder = Holder,
 			  etop_monitor = EtopMon} = State) when Ref =:= EtopMon ->
     Holder ! stop,
     {stop, shutdown, State};
-handle_info({'DOWN', Ref, _, _, Info}, 
+
+handle_info({'DOWN', Ref, _, _, _}, 
 	    #pro_wx_state{holder_monitor = HMonitor} = State) when Ref =:= HMonitor ->
     etop:stop(),
     {stop, shutdown, State};
+
 handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
     wxListCtrl:setItemCount(Grid, Count),
     wxListCtrl:refreshItems(Grid, 0, wxListCtrl:getItemCount(Grid)),
