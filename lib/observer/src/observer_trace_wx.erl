@@ -406,23 +406,8 @@ write_file(Frame, Filename, #trace_options{send = Send,
     case file:write_file(Filename, Binary) of
 	ok ->
 	    success;
-	
 	{error, Reason} ->
-	    io:format("Reason: ~p~n", [Reason]),
-	    FailMsg = case Reason of 
-			  enoent ->
-			      "Error! A component of the file name does not exist.";
-			  enotdir ->
-			      "Error! A component of the file name is not a directory.";
-			  enospc ->
-			      "Error! There is a no space left on the device.";
-			  eacces ->
-			      "Error! Missing permission for writing the file or searching one of the parent directories.";
-			  eisdir ->
-			      "Error! The named file is a directory.";
-			  _ ->
-			      "Error! Could not save settings"
-		      end,
+	    FailMsg = file:format_error(Reason),
 	    wxDialog:showModal(wxMessageDialog:new(Frame, FailMsg))
     end.
 

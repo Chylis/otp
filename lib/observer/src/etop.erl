@@ -19,9 +19,9 @@
 -module(etop).
 -author('siri@erix.ericsson.se').
 
--export([start/1, start/2, config/2, stop/0, dump/1, help/0, init_data_handler/1]).
+-export([start/0, start/1, start/2, config/2, stop/0, dump/1, help/0, init_data_handler/1]).
 %% Internal
--export([update/1]).
+-export([update/2]).
 -export([loadinfo/1, meminfo/2, getopt/2]).
 
 -include("etop.hrl").
@@ -88,10 +88,12 @@ dump(File) ->
 	Error -> Error
     end.
 
-start(WxPid) ->
-    start(WxPid, []).
-    
-start(WxPid, Opts) ->
+start() ->
+    start([], null).
+start(Who) ->
+    start([], Who).
+
+start(Opts, Who) ->
     process_flag(trap_exit, true),
     Config1 = handle_args(init:get_arguments() ++ Opts, #opts{}),
     Config2 = Config1#opts{server=self()},
@@ -121,12 +123,22 @@ start(WxPid, Opts) ->
     AccumTab = ets:new(accum_tab,
 		       [set,public,{keypos,#etop_proc_info.pid}]),
     Config4 = Config3#opts{accum_tab=AccumTab},
-
-    %% Link the output server
-    link(WxPid),
-    Config5 = Config4#opts{out_proc = WxPid},
-    spawn_link(?MODULE, init_data_handler, [Config5]),
-    Config5.
+    case Who of
+	null ->
+	    %% Start the output server
+	    Out = spawn_link(Config4#opts.out_mod, init, [Config4]),
+	    Config5 = Config4#opts{out_proc = Out},       
+	    init_data_handler(Config5),
+	    ok;
+	observer ->
+	    process_flag(trap_exit, false),
+	    Config5 = Config4#opts{out_proc = undefined, 
+				   out_mod = undefined},
+	    {_, EtopMon} = spawn_monitor(fun() ->
+						 init_data_handler(Config5)
+					 end),
+	    {EtopMon, Config5}
+    end.
 
 check_runtime_tools_vsn(Node) ->
     case rpc:call(Node,observer_backend,vsn,[]) of
@@ -152,10 +164,17 @@ data_handler(Reader, Opts) ->
 	stop ->
 	    stop(Opts),
 	    ok;
-	{update, Pid} ->
-	    Pid ! update(Opts);
+	{update, From, Dir} ->
+	    From ! {update, update(Opts, Dir)},
+	    data_handler(Reader, Opts);
+	{get_opt, What, From} ->
+	    From ! {What, getopt(What, Opts)},
+	    data_handler(Reader, Opts);
 	{config,{Key,Value}} ->
-	    data_handler(Reader,putopt(Key,Value,Opts));
+	    data_handler(Reader, putopt(Key,Value,Opts));
+	{observer_dump, Fd, Info} ->
+	    etop_txt:do_update(Fd, Info, Opts),
+	    data_handler(Reader, Opts);
 	{dump,Fd} ->
 	    Opts#opts.out_proc ! {dump,Fd},
 	    data_handler(Reader,Opts);
@@ -174,14 +193,19 @@ data_handler(Reader, Opts) ->
 	    data_handler(Reader, Opts)
     end.
 
-stop(Opts) -> %Undersök!
-    (Opts#opts.out_mod):stop(Opts#opts.out_proc),
+stop(Opts) ->
+    case (Opts#opts.out_mod =:= undefined) and (Opts#opts.out_proc =:= undefined) of
+	true ->
+	    ok;
+	false ->
+	    (Opts#opts.out_mod):stop(Opts#opts.out_proc)
+    end,
     if Opts#opts.tracing == on -> etop_tr:stop_tracer(Opts);
        true -> ok
     end,
     unregister(etop_server).
-    
-update(#opts{store=Store,node=Node,tracing=Tracing}=Opts) ->
+
+update(#opts{store=Store,node=Node,tracing=Tracing}=Opts, Dir) ->
     Pid = spawn_link(Node,observer_backend,etop_collect,[self()]),
     Info = receive {Pid,I} -> I 
 	   after 1000 -> exit(connection_lost)
@@ -200,10 +224,10 @@ update(#opts{store=Store,node=Node,tracing=Tracing}=Opts) ->
 	   true -> 
 		lists:map(fun(PI) -> PI#etop_proc_info{runtime='-'} end,ProcInfo)
 	end,
-    ProcInfo2 = sort(Opts,ProcInfo1),
-    Info#etop_info{procinfo=ProcInfo2}.    
+    ProcInfo2 = sort(Opts,ProcInfo1, Dir),
+    Info#etop_info{procinfo=ProcInfo2}.   
 
-sort(Opts,PI) ->
+sort(Opts, PI, Dir) ->
     Tag = get_tag(Opts#opts.sort),
     PI1 = if Opts#opts.accum -> 
 		  PI;
@@ -229,13 +253,24 @@ sort(Opts,PI) ->
 		    end,
 		    PI)
 	  end,
-    PI2 = lists:reverse(lists:keysort(Tag,PI1)),
+    PI2 = case Dir of 
+	      incr ->
+		  lists:keysort(Tag, PI1);
+	      decr ->
+		  lists:reverse(lists:keysort(Tag,PI1))
+	  end,
     lists:sublist(PI2,Opts#opts.lines).
 
 get_tag(runtime) -> #etop_proc_info.runtime;
 get_tag(memory) -> #etop_proc_info.mem;
 get_tag(reductions) -> #etop_proc_info.reds;
-get_tag(msg_q) -> #etop_proc_info.mq.
+get_tag(msg_q) -> #etop_proc_info.mq;
+get_tag(pid) -> #etop_proc_info.pid;
+get_tag(name) -> #etop_proc_info.name;
+get_tag(cf) -> #etop_proc_info.cf.
+
+     
+    
     
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -258,7 +293,12 @@ getopt(What, Config) when is_record(Config, opts) ->
 
 putopt(Key, Value, Config) when is_record(Config, opts) ->
     Config1 = handle_args([{Key,Value}],Config),
-    Config1#opts.out_proc ! {config,{Key,Value},Config1},
+    case (Config1#opts.out_proc =:= undefined) and (Config1#opts.out_mod =:= undefined) of
+	true ->
+	    ok;
+	false ->
+	    Config1#opts.out_proc ! {config,{Key,Value},Config1}
+    end,
     Config1.
 
 handle_args([{node, [NodeString]}| R], Config) when is_list(NodeString) ->
@@ -316,7 +356,7 @@ handle_args([_| R], C) ->
 handle_args([], C) ->
     C.
 
-output(graphical) -> observer_pro_wx;
+output(graphical) -> etop_gui;
 output(text) -> etop_txt.
 
 

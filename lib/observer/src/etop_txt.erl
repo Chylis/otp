@@ -46,7 +46,7 @@ loop(Config) ->
     end.
 
 do_update(Config) ->
-    Info = etop:update(Config),
+    Info = etop:update(Config, decr),
     do_update(standard_io,Info,Config).
 
 do_update(Fd,Info,Config) ->
@@ -98,4 +98,3 @@ writepinfo(Fd,[#etop_proc_info{pid=Pid,
     writepinfo(Fd,T);
 writepinfo(_Fd,[]) ->
     ok.
-

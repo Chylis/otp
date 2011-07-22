@@ -252,7 +252,7 @@ get_event(Info, Win, Grid, GL1, SysInfo, Config) ->
     end.
 
 do_update(Grid, SysInfo, Config) ->
-    Info = etop:update(Config),
+    Info = etop:update(Config, decr),
     Lines = makegridlines(Info#etop_info.procinfo, Grid, 2),
     clear_lines(Lines, getopt(lines,Config) + 1, Grid),
     makesysinfo(getopt(node,Config),Info,SysInfo),

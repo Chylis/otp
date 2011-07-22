@@ -43,6 +43,7 @@ MODULES= \
 	etop_txt \
 	observer_wx \
 	observer_pro_wx \
+	observer_procinfo \
 	observer_sys \
 	observer_sys_wx \
 	observer_trace_wx \
