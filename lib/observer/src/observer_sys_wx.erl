@@ -157,7 +157,6 @@ create_sys_menu(Parent) ->
     observer_wx:create_menus(Parent, [View]).
 
 update_syspage(#sys_wx_state{node = Node} = State) ->
-    io:format("Updating syspage for node ~p~n", [Node]),
     Info = get_syspage_info(Node),
     update_info_label(node_label, Info, State#sys_wx_state.node_label),
     update_info_label(no_procs, Info, State#sys_wx_state.no_procs),
@@ -292,7 +291,7 @@ handle_event(#wx{id = ?ID_REFRESH_INTERVAL,
 			   refr_intv = Intv0,
 			   parent_notebook = Notebook} = State) ->
     Parent = observer_tv_wx:get_wx_parent(Notebook),
-    case observer_tv_wx:interval_dialog(Parent, Timer0 /= false, Intv0, 10, 5*60) of
+    case observer_tv_wx:interval_dialog(Parent, Timer0 /= false, Intv0, 1, 5*60) of
 	cancel ->
 	    {noreply, State};
 	{true, Intv} ->

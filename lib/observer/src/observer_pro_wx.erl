@@ -472,7 +472,6 @@ handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
 
 handle_info(refresh_interval, #pro_wx_state{sort_dir = Dir,
 					    holder = Holder} = State) ->
-    io:format("Refresh interval ~p~n", [time()]),
     refresh_grid(Holder, Dir),
     {noreply, State};
 
@@ -496,7 +495,7 @@ handle_info({active, Node}, #pro_wx_state{holder = Holder,
     Timer = case Timer0 of
 		true ->
 		    Intv = get_intv(),
-		    {ok, Ref} = timer:send_interval(Intv*1000, refresh_interval),
+		    {ok, Ref} = timer:send_interval(Intv, refresh_interval),
 		    Ref;
 		false ->
 		    false
@@ -511,7 +510,6 @@ handle_info(not_active, #pro_wx_state{refr_timer = Timer0} = State) ->
 		    timer:cancel(Timer0),
 		    true
 	    end,
-    
     {noreply, State#pro_wx_state{refr_timer=Timer}};
 
 handle_info({node, Node}, #pro_wx_state{holder = Holder, sort_dir = Dir} = State) ->
@@ -592,7 +590,7 @@ handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_select
 handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
 	     #pro_wx_state{panel = Panel, refr_timer=Timer0} = State) ->
     Intv0 = get_intv() div 1000,
-    interval_dialog(Panel, self(), Timer0 /= false, Intv0, 10, 5*60),
+    interval_dialog(Panel, self(), Timer0 /= false, Intv0, 1, 5*60),
     receive
 	cancel ->
 	    {noreply, State};
