@@ -37,7 +37,9 @@
 -define(MATCHPAGE_ADDFUN, 13).
 -define(MATCHPAGE_ADDMS, 14).
 -define(MATCHPAGE_ADDMS_ALIAS, 15).
--define(MATCHPAGE_LISTBOX, 17).
+-define(MATCHPAGE_LISTBOX, 16).
+
+-define(MATCH_POPUP_DIALOG, 17).
 
 -define(MODULEPOPUP_SELECT, 20).
 -define(MODULEPOPUP_SELALL, 21).
@@ -54,19 +56,28 @@ start(ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 			      TracedFuncs, MatchSpecs], []).
 
 init([ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs]) ->
-    {Frame, Tree, Boxes, ModuleListBox, MatchTxtCtrl, MatchListBox} = setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs),
-    {Frame, #traceopts_state{
-       parent = ParentPid,
-       frame = Frame,
-       tree = Tree,
-       functionpage_listbox = ModuleListBox,
-       matchpage_styled_txtctrl = MatchTxtCtrl,
-       matchpage_listbox = MatchListBox,
-       boxes = Boxes,
-       match_specs = MatchSpecs,
-       traced_funcs = TracedFuncs,
-       trace_options = TraceOpts}}.
+    try
+	{Frame, Tree, Boxes, ModuleListBox, MatchTxtCtrl, MatchListBox} 
+	    = setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs),
+	
+	{Frame, 
+	 #traceopts_state{parent = ParentPid,
+			  frame = Frame,
+			  tree = Tree,
+			  functionpage_listbox = ModuleListBox,
+			  matchpage_styled_txtctrl = MatchTxtCtrl,
+			  matchpage_listbox = MatchListBox,
+			  boxes = Boxes,
+			  match_specs = MatchSpecs,
+			  traced_funcs = TracedFuncs,
+			  trace_options = TraceOpts}}
+	    
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(ParentFrame, Node),
+	    {stop, badrpc, #traceopts_state{}}
+    end.
 
+	
 setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Setup main window
@@ -197,8 +208,7 @@ filter_listbox_data(Input, Data, ListBox) ->
     FilteredData.
 
 get_modules(Node) ->
-    lists:sort([Module || {Module, _} <- rpc:call(Node, code, all_loaded, [])]).
-
+    lists:sort([Module || {Module, _} <- observer_wx:try_rpc(Node, code, all_loaded, [])]).
 
 optionpage_top_right(Panel, TopRightSz, Options, Text) ->
     Sizer = wxBoxSizer:new(?wxVERTICAL),
@@ -319,7 +329,6 @@ parse_function_names([H|T], Acc) ->
     IsFun = re:run(H, ".*-fun-\\d*?-"),
     IsLc = re:run(H, ".*-lc\\$\\^\\d*?/\\d*?-\\d*?-"),
     IsLbc = re:run(H, ".*-lbc\\$\\^\\d*?/\\d*?-\\d*?-"),
-    io:format("~p~n", [IsLc]),
     Parsed = 
 	if IsFun =/= nomatch -> "Fun: " ++ H;
 	   IsLc =/= nomatch -> "List comprehension: " ++ H;
@@ -531,6 +540,8 @@ find_index([Sel|STail] = Selections, FunctionList, N, Acc) when is_list(Sel) ->
 atomlist_to_stringlist(Modules) ->
     [atom_to_list(X) || X <- Modules].
 
+ensure_last_is_dot([]) ->
+    ".";
 ensure_last_is_dot(String) ->
     case lists:last(String) =:= $. of
 	true ->
@@ -540,7 +551,7 @@ ensure_last_is_dot(String) ->
     end.
 
 check_correct_MS(String) ->
-    Tokens = try_scan(ensure_last_is_dot(String)),
+    Tokens = try_scan(String),
     case try_parse(Tokens) of
 	{ok, Term} ->
 	    case erlang:match_spec_test([], Term, trace) of
@@ -615,9 +626,6 @@ dbg_from_string(Str0) ->
 	{error,Reason2,_} ->
 	    {error,Reason2}
     end.
-
-create_msgdialog(Frame, Msg) ->
-    wxDialog:showModal(wxMessageDialog:new(Frame, Msg)).
 
 get_correct_matchspec_components(From, State) ->
     case From of
@@ -703,7 +711,7 @@ handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
 			      match_specs = MatchSpecs,
 			      popup_open = false} = State) ->
     
-    Dialog = wxDialog:new(Frame, ?wxID_ANY, "Match specification"),
+    Dialog = wxDialog:new(Frame, ?MATCH_POPUP_DIALOG, "Match specification"),
     {MatchPanel, MatchSz, StyledTxtCtrl, ListBox} = create_matchspec_page(Dialog, MatchSpecs, matchpopup),
     ApplyBtn = wxButton:new(MatchPanel, ?wxID_APPLY),
     CancelBtn = wxButton:new(MatchPanel, ?wxID_CANCEL, []),
@@ -714,7 +722,8 @@ handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
     wxStdDialogButtonSizer:addButton(DialogBtnSz, CancelBtn),
     wxStdDialogButtonSizer:realize(DialogBtnSz),
     wxSizer:add(MatchSz, DialogBtnSz),
-    
+
+    wxDialog:connect(Dialog, close_window),
     wxDialog:show(Dialog),
     {noreply, State#traceopts_state{matchspec_popup_dialog = Dialog,
 				    matchspec_popup_listbox = ListBox,
@@ -753,7 +762,8 @@ handle_event(#wx{id = ?MATCHPAGE_ADDFUN,
 			  FunMS = #match_spec{str_ms = StrMS, term_ms = TermMS, fun2ms = StrFun},
 			  case lists:member(FunMS, MatchSpecs) of
 			      true ->
-				  create_msgdialog(Frame, StrFun ++ "\nalready exists"),
+				  observer_wx:create_txt_dialog(Frame, StrFun ++ "\nalready exists",
+							       "Error", ?wxICON_ERROR),
 				  MatchSpecs;
 			      false ->
 				  wxStyledTextCtrl:setText(StyledTxtCtrl, StrMS),
@@ -762,7 +772,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDFUN,
 			  end;
 		      {error, {_, Module, What}} ->
 			  FailMsg = Module:format_error(What),
-			  create_msgdialog(Frame, FailMsg),
+			  observer_wx:create_txt_dialog(Frame, FailMsg, "Error", ?wxICON_ERROR),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
@@ -781,14 +791,15 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS,
 			  MS = #match_spec{str_ms = StrMS, term_ms = TermMS},
 			  case lists:member(MS, MatchSpecs) of
 			      true ->
-				  create_msgdialog(Frame, StrMS ++ "\nalready exists"),
+				  observer_wx:create_txt_dialog(Frame, StrMS ++ "\nalready exists",
+							       "Error", ?wxICON_ERROR),
 				  MatchSpecs;
 			      false ->
 				  update_matchspec_listbox(StrMS, {PopupListBox, PageListBox}, From),
 				  lists:reverse([MS | MatchSpecs])
 			  end;
 		      {false, Reason} ->
-			  create_msgdialog(Frame, Reason),
+			  observer_wx:create_txt_dialog(Frame, Reason, "Error", ?wxICON_ERROR),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
@@ -813,10 +824,12 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 				      ?wxID_CANCEL ->
 					  ""
 				  end,
+			  wxDialog:destroy(Dialog),
 			  
 			  case Alias of
 			      "" ->
-				  create_msgdialog(Frame, "Bad alias"),
+				  observer_wx:create_txt_dialog(Frame, "Bad alias", "Syntax error", 
+								?wxICON_ERROR),
 				  MatchSpecs;
 			      
 			      _ ->
@@ -826,7 +839,8 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 				  
 				  if 
 				      OccupiedAlias =:= match -> 
-					  create_msgdialog(Frame, "Alias " ++ Alias ++ " already exists"),
+					  observer_wx:create_txt_dialog(Frame, "Alias " ++ Alias ++ " already exists",
+									"Error", ?wxICON_ERROR),
 					  MatchSpecs;
 				      true ->
 					  update_matchspec_listbox(Alias, {PopupListBox, PageListBox}, From),
@@ -834,7 +848,7 @@ handle_event(#wx{id = ?MATCHPAGE_ADDMS_ALIAS,
 				  end
 			  end;
 		      {false, Reason} ->
-			  create_msgdialog(Frame, Reason),
+			  observer_wx:create_txt_dialog(Frame, Reason, "Error", ?wxICON_ERROR),
 			  MatchSpecs
 		  end,
     {noreply, State#traceopts_state{match_specs = MatchSpecs2}};
@@ -891,6 +905,11 @@ handle_event(#wx{id = ?wxID_CANCEL,
     wxDialog:destroy(Dialog),
     {noreply, State#traceopts_state{popup_open = false}};
 
+handle_event(#wx{id = ?MATCH_POPUP_DIALOG,
+		 event = #wxClose{type = close_window}},
+	     #traceopts_state{matchspec_popup_dialog = Dialog} = State) ->
+    wxDialog:destroy(Dialog),
+    {noreply, State#traceopts_state{popup_open = false}};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 						%Module Popup

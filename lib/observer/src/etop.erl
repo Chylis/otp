@@ -204,7 +204,7 @@ stop(Opts) ->
        true -> ok
     end,
     unregister(etop_server).
-
+    
 update(#opts{store=Store,node=Node,tracing=Tracing}=Opts, Dir) ->
     Pid = spawn_link(Node,observer_backend,etop_collect,[self()]),
     Info = receive {Pid,I} -> I 

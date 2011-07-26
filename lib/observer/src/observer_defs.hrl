@@ -16,10 +16,10 @@
 %%
 %% %CopyrightEnd%
 
--define(OBS, observer_wx).
--define(OBS_SYS_LOGIC, observer_sys).
--define(OBS_SYS_WX, observer_sys_wx).
--define(OBS_PRO_WX, observer_pro_wx).
+%% -define(OBS, observer_wx).
+%% -define(OBS_SYS_LOGIC, observer_sys).
+%% -define(OBS_SYS_WX, observer_sys_wx).
+%% -define(OBS_PRO_WX, observer_pro_wx).
 
 
 -record(trace_options, {send         = false,

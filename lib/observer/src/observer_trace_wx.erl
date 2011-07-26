@@ -31,7 +31,7 @@
 
 
 start(Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid) ->
-    wx_object:start_link(?MODULE, [Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid], []).
+    wx_object:start(?MODULE, [Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid], []).
 
 init([Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid]) ->
     State = 
@@ -146,14 +146,17 @@ handle_event(#wx{id = ?SAVE_BUFFER, event = #wxCommand{type = command_menu_selec
     case wxFileDialog:showModal(Dialog) of
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(Dialog),
+	    wxDialog:destroy(Dialog),
 	    case filelib:is_file(Path) of
 		true ->
-		    wxTextCtrl:appendText(TxtCtrl, "File already exists " ++  Path ++ "\n");
+		    observer_wx:create_txt_dialog(Frame, "File already exists: " ++ Path ++ "\n",
+						  "Error", ?wxICON_ERROR);
 		false ->
-		    wxTextCtrl:saveFile(TxtCtrl, [{file, Path}]),
-		    wxTextCtrl:appendText(TxtCtrl, "Saved to: " ++  Path ++ "\n")
+		    wxTextCtrl:saveFile(TxtCtrl, [{file, Path}])
 	    end;
-	_ -> ok
+	_ -> 
+	    wxDialog:destroy(Dialog),
+	    ok
     end,
     {noreply, State};
 
@@ -170,6 +173,7 @@ handle_event(#wx{id = ?SAVE_TRACEOPTS,
 	_ ->
 	    ok
     end,
+    wxDialog:destroy(Dialog),
     {noreply, State};
 
 handle_event(#wx{id = ?LOAD_TRACEOPTS,
@@ -183,8 +187,9 @@ handle_event(#wx{id = ?LOAD_TRACEOPTS,
 		 _ ->
 		     State
 	     end,
-	    {noreply, State2};
-    
+    wxDialog:destroy(Dialog),
+    {noreply, State2};
+
 
 handle_event(#wx{event = #wxClose{type = close_window}}, 
 	     #state{parent = Parent,
@@ -270,6 +275,7 @@ start_trace(Node, TracedProcs, TracedDict,
 			   events = Events, on_1st_spawn = On1Spawn,
 			   on_all_spawn = AllSpawn, on_1st_link = On1Link,
 			   on_all_link = AllLink}) ->
+    dbg:stop_clear(),
     MyPid = self(),
     HandlerFun = fun(NewMsg, _) ->
 			 MyPid ! NewMsg
@@ -408,7 +414,7 @@ write_file(Frame, Filename, #trace_options{send = Send,
 	    success;
 	{error, Reason} ->
 	    FailMsg = file:format_error(Reason),
-	    wxDialog:showModal(wxMessageDialog:new(Frame, FailMsg))
+	    observer_wx:create_txt_dialog(Frame, FailMsg, "Error", ?wxICON_ERROR)
     end.
 
 
@@ -419,7 +425,7 @@ read_settings(Filename, #state{frame = Frame} = State) ->
 	    State#state{trace_options = TraceOpts, match_specs = MatchSpecs};
 	{error, Reason} ->
 	    io:format("~p~n", [Reason]),
-	    wxDialog:showModal(wxMessageDialog:new(Frame, "An error occured while loading settings")),
+	    observer_wx:create_txt_dialog(Frame, "Could not load settings", "Error", ?wxICON_ERROR),
 	    State
     end.
 

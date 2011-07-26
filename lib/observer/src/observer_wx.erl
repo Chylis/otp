@@ -20,7 +20,9 @@
 -behaviour(wx_object).
 
 -export([start/0]).
--export([create_menus/2, create_menu/2]).
+-export([create_menus/2, create_menu/2, create_txt_dialog/4, try_rpc/4, 
+	 return_to_localnode/2]).
+
 -export([init/1, handle_event/2, handle_cast/2, terminate/2, code_change/3, 
 	 handle_call/3, handle_info/2, check_page_title/1]).
 
@@ -44,7 +46,6 @@
 	 status_bar,
 	 notebook,
 	 main_panel,
-	 app_panel,
 	 pro_panel,
 	 tv_panel,
 	 sys_panel,
@@ -97,16 +98,12 @@ setup(#state{frame = Frame} = State) ->
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
     
     %% System Panel
-    SysPanel = ?OBS_SYS_WX:start_link(Notebook, self()),
+    SysPanel = observer_sys_wx:start_link(Notebook, self()),
     wxNotebook:addPage(Notebook, SysPanel, "System", []),
     
     %% Process Panel
-    ProPanel = ?OBS_PRO_WX:start_link(Notebook, self()),
+    ProPanel = observer_pro_wx:start_link(Notebook, self()),
     wxNotebook:addPage(Notebook, ProPanel, "Processes", []),
-   
-    %% Application Panel
-    %AppPanel = wxPanel:new(Notebook, []),
-    %wxNotebook:addPage(Notebook, AppPanel, "Applications", []),
 
     %% Table Viewer Panel
     TVPanel = observer_tv_wx:start_link(Notebook, self()),
@@ -128,7 +125,6 @@ setup(#state{frame = Frame} = State) ->
 			   sys_panel = SysPanel,
 			   pro_panel = ProPanel,
 			   tv_panel  = TVPanel,
-%%			   app_panel = AppPanel,
 			   active_tab = SysPid,
 			   node  = node(),
 			   nodes = Nodes
@@ -141,6 +137,7 @@ setup(#state{frame = Frame} = State) ->
 %%Callbacks
 handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}},
 	     #state{active_tab=Previous, node=Node, notebook = Notebook} = State) ->
+    io:format("Command notebook changed ~n"),
     Pid = get_active_pid(State),
     Previous ! not_active,
     Pid ! {active, Node},
@@ -158,37 +155,57 @@ handle_event(#wx{id = ?wxID_HELP, event = #wxCommand{type = command_menu_selecte
     io:format("~p ~p, you clicked help", [?MODULE, ?LINE]),
     {noreply, State};
 
-handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_selected}}, State) ->
+handle_event(#wx{id = ?ID_CONNECT, event = #wxCommand{type = command_menu_selected}}, 
+	     #state{frame = Frame} = State) ->
     UpdState = case create_connect_dialog(connect, State) of
 		   cancel ->
 		       State;
 		   {value, [], _, _} ->
+		       create_txt_dialog(Frame, "Node must have a name",
+					 "Error", ?wxICON_ERROR),
 		       State;
-		   {value, NodeName, 0, Cookie} -> %Shortname,
-		       net_kernel:start([list_to_atom(NodeName), shortnames]),
-		       erlang:set_cookie(node(), list_to_atom(Cookie)),
-		       change_node_view(node(), State);
-		   {value, NodeName, 1, Cookie} -> %Longname
-		       net_kernel:start([list_to_atom(NodeName), longnames]),
-		       erlang:set_cookie(node(), list_to_atom(Cookie)),
-		       change_node_view(node(), State)
-		       %% felhantering, cookie
+		   {value, NodeName, LongOrShort, Cookie} -> %Shortname,
+		       try
+			   case connect(list_to_atom(NodeName), LongOrShort, list_to_atom(Cookie)) of
+			       {ok, set_cookie} ->
+				   change_node_view(node(), State);
+			       {error, set_cookie} ->
+				   create_txt_dialog(Frame, "Could not set cookie", 
+						     "Error", ?wxICON_ERROR),
+				   State;
+			       {error, net_kernel, _Reason} ->
+				   create_txt_dialog(Frame, "Could not enable node",
+						     "Error", ?wxICON_ERROR),
+				   State
+			   end
+		       catch _:_ ->
+			       create_txt_dialog(Frame, "Could not enable node",
+						 "Error", ?wxICON_ERROR),
+			       State
+		       end
 	       end,
     {noreply, UpdState};
 
-handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}}, State) ->
-
+handle_event(#wx{id = ?ID_PING, event = #wxCommand{type = command_menu_selected}}, 
+	     #state{frame = Frame} = State) ->
     UpdState = case create_connect_dialog(ping, State) of
 		   cancel ->
 		       State;
 		   {value, Value} when is_list(Value) ->
-		       Node = list_to_atom(Value),
-		       case net_adm:ping(Node) of
-			   pang ->
-			       create_popup_dialog("Connect failed", "Pang", State),
-			       State;
-			   pong ->
-			       change_node_view(Node, State)
+		       try
+			   
+			   Node = list_to_atom(Value),
+			   case net_adm:ping(Node) of
+			       pang ->
+				   create_txt_dialog(Frame, "Connect failed", "Pang", ?wxICON_EXCLAMATION),
+				   State;
+			       pong ->
+				   change_node_view(Node, State)
+			   end
+			       
+		       catch _:_ ->
+			       create_txt_dialog(Frame, "Connect failed", "Pang", ?wxICON_EXCLAMATION),
+			       State
 		       end
 	       end,
     {noreply, UpdState};
@@ -224,15 +241,12 @@ handle_call(Msg, _From, State) ->
     io:format("~p~p: Got Call ~p~n",[?MODULE, ?LINE, Msg]),
     {reply, ok, State}.
 
-%% handle_info({statusbar, Msg}, State) ->
-%%     wxStatusBar:setStatusText(State#state.status_bar, Msg),
-%%     {noreply, State};
-
 handle_info({nodeup, _Node}, State) ->
     State2 = update_node_list(State),
     {noreply, State2};
 
-handle_info({nodedown, Node}, State) ->
+handle_info({nodedown, Node}, 
+	    #state{frame = Frame} = State) ->
     State2 = case Node =:= State#state.node of
 		 true ->
 		     change_node_view(node(), State);
@@ -241,7 +255,7 @@ handle_info({nodedown, Node}, State) ->
 	     end,
     State3 = update_node_list(State2),
     Msg = ["Node down: " | atom_to_list(Node)],
-    create_popup_dialog(Msg, "Node down", State3),
+    create_txt_dialog(Frame, Msg, "Node down", ?wxICON_EXCLAMATION),
     {noreply, State3};
 
 handle_info(Info, State) ->
@@ -257,6 +271,53 @@ code_change(_, _, State) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+try_rpc(Node, Mod, Func, Args) ->
+    case
+	rpc:call(Node, Mod, Func, Args) of
+	{badrpc, Reason} ->
+	    error_logger:error_report([{node, Node},
+				       {call, {Mod, Func, Args}},
+				       {reason, {badrpc, Reason}}]),
+	    error({badrpc, Reason});
+	Res ->
+	    Res
+    end.
+
+return_to_localnode(Frame, Node) ->
+    case node() =/= Node of
+	true ->
+	    create_txt_dialog(Frame, "Error occured on remote node",
+			      "Error", ?wxICON_ERROR),
+	    disconnect_node(Node);
+	false ->
+	    ok
+    end.
+
+create_txt_dialog(Frame, Msg, Title, Style) ->
+    MD = wxMessageDialog:new(Frame, Msg, [{style, Style}]),
+    wxMessageDialog:setTitle(MD, Title),
+    wxDialog:showModal(MD),
+    wxDialog:destroy(MD).
+
+connect(NodeName, 0, Cookie) ->
+    connect2(NodeName, shortnames, Cookie);
+connect(NodeName, 1, Cookie) ->
+    connect2(NodeName, longnames, Cookie).
+
+connect2(NodeName, Opts, Cookie) ->
+    case net_kernel:start([NodeName, Opts]) of
+	{ok, _} ->
+	    case is_alive() of
+		true ->
+		    erlang:set_cookie(node(), Cookie),
+		    {ok, set_cookie};
+		false ->
+		    {error, set_cookie}
+	    end;
+	{error, Reason} ->
+	    {error, net_kernel, Reason}
+    end.
+
 change_node_view(Node, State = #state{pro_panel=Pro, sys_panel=Sys, tv_panel=Tv}) ->
     lists:foreach(fun(Pid) -> wx_object:get_pid(Pid) ! {node, Node} end,
 		  [Pro, Sys, Tv]),
@@ -269,10 +330,9 @@ check_page_title(Notebook) ->
     Selection = wxNotebook:getSelection(Notebook),
     wxNotebook:getPageText(Notebook, Selection).
 
-get_active_pid(#state{notebook=Notebook, pro_panel=Pro, sys_panel=Sys, tv_panel=Tv, app_panel=App}) ->
+get_active_pid(#state{notebook=Notebook, pro_panel=Pro, sys_panel=Sys, tv_panel=Tv}) ->
     Panel = case check_page_title(Notebook) of
 		"Processes" -> Pro;
-		"Applications" -> App;
 		"System" -> Sys;
 		"Table Viewer" -> Tv
 	    end,
@@ -282,8 +342,11 @@ create_connect_dialog(ping, #state{frame = Frame}) ->
     Dialog = wxTextEntryDialog:new(Frame, "Connect to node"),
     case wxDialog:showModal(Dialog) of
 	?wxID_OK ->
-	    {value, wxTextEntryDialog:getValue(Dialog)};
+	    Value = wxTextEntryDialog:getValue(Dialog),
+	    wxDialog:destroy(Dialog),
+	    {value, Value};
 	?wxID_CANCEL ->
+	    wxDialog:destroy(Dialog),
 	    cancel
     end;
 create_connect_dialog(connect, #state{frame = Frame}) ->
@@ -340,15 +403,12 @@ create_connect_dialog(connect, #state{frame = Frame}) ->
 	    NameValue = wxTextCtrl:getValue(NameCtrl),
 	    NameLngthValue = wxRadioBox:getSelection(RadioBox),
 	    CookieValue = wxTextCtrl:getValue(CookieCtrl),
+	    wxDialog:destroy(Dialog),
 	    {value, NameValue, NameLngthValue, CookieValue};
 	?wxID_CANCEL ->
+	    wxDialog:destroy(Dialog),
 	    cancel
     end.
-
-create_popup_dialog(Msg, Title, #state{frame = Frame}) ->
-    Popup = wxMessageDialog:new(Frame, Msg),
-    wxMessageDialog:setTitle(Popup, Title),
-    wxDialog:showModal(Popup).
 
 default_menus(NodesMenuItems) ->
     FileMenu = {"File", [#create_menu{id = ?wxID_EXIT, text = "Quit"}]},

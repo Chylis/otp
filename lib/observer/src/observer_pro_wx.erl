@@ -86,9 +86,10 @@ start_link(Notebook, Parent) ->
 init([Notebook, Parent]) ->
     {EtopMonitor, Config} = etop:start(observer),
     SortDir = decr,
-    Info = etop:update(Config, SortDir),
     Attrs = create_attrs(),
     Self = self(),
+    change_lines(50),
+    Info = etop:update(Config, SortDir),
     {Holder, HolderMon} = spawn_monitor(fun() ->
 						init_table_holder(Self, 
 								  Info, 
@@ -96,7 +97,6 @@ init([Notebook, Parent]) ->
 					end),
     Count = length(Info#etop_info.procinfo),
     {ProPanel, State} = setup(Notebook, Parent, Holder, Count),
-    
     refresh_grid(Holder, SortDir),
     MatchSpecs = generate_matchspecs(),
     {ProPanel, State#pro_wx_state{etop_monitor = EtopMonitor,
@@ -439,8 +439,10 @@ line_dialog(ParentFrame, OldLines, Holder, Dir) ->
 start_procinfo(Node, Pid, Frame, Opened, View) ->
     case lists:member(Pid, Opened) of
 	true ->
+	    io:format("TRUE!~n"),
 	    Opened;
 	false ->
+	    io:format("FALSE!~n"),
 	    observer_procinfo:start(Node, Pid, Frame, self(), View),
 	    [Pid | Opened]
     end.
@@ -448,14 +450,13 @@ start_procinfo(Node, Pid, Frame, Opened, View) ->
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 handle_info({'DOWN', Ref, _, _, _}, 
-	    #pro_wx_state{holder = Holder,
-			  etop_monitor = EtopMon} = State) when Ref =:= EtopMon ->
-    Holder ! stop,
+	    #pro_wx_state{etop_monitor = EtopMon} = State) when Ref =:= EtopMon ->
+    io:format("Etop died~n"),
     {stop, shutdown, State};
 
 handle_info({'DOWN', Ref, _, _, _}, 
 	    #pro_wx_state{holder_monitor = HMonitor} = State) when Ref =:= HMonitor ->
-    etop:stop(),
+    io:format("Holder died~n"),
     {stop, shutdown, State};
 
 handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
@@ -516,8 +517,10 @@ handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
 
-terminate(Reason, #pro_wx_state{}) ->
+terminate(Reason, #pro_wx_state{holder = Holder}) ->
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
+    Holder ! stop,
+    etop:stop(),
     ok.
 
 code_change(_, _, State) ->
@@ -543,9 +546,11 @@ handle_event(#wx{id = ?ID_DUMP_TO_FILE},
     case wxFileDialog:showModal(FD) of
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(FD),
-	    dump_to_file(FD, Path, Holder),
+	    wxDialog:destroy(FD),
+	    dump_to_file(Panel, Path, Holder),
 	    io:format("It should Dump to file ~p~n", [Path]);
-	_ -> ok
+	_ -> 
+	    wxDialog:destroy(FD)
     end,
     {noreply, State};
 
@@ -691,13 +696,14 @@ handle_event(#wx{event = #wxList{type = command_list_item_right_click,
 	     #pro_wx_state{popup_menu = Popup,
 			   holder = Holder} = State) ->
     
-    case get_row(Holder, Row, pid) of
-	{error, undefined} ->
-	    NewPid = undefined;
-	{ok, P} ->
-	    NewPid = P,
-	    wxWindow:move(Popup, wx_misc:getMousePosition()),
-	    wxWindow:show(Popup)
+    NewPid = case get_row(Holder, Row, pid) of
+		 {error, undefined} ->
+		     wxWindow:show(Popup, [{show, false}]),
+		     undefined;
+		 {ok, P} ->
+		     wxWindow:move(Popup, wx_misc:getMousePosition()),
+		     wxWindow:show(Popup),
+		     P
     end,
     {noreply, State#pro_wx_state{selected_pid = NewPid}};
 
@@ -887,5 +893,7 @@ dump_to_file(Parent, FileName, Holder) ->
 	    Holder ! {dump, Fd};
 	{error, Reason} ->
 	    FailMsg = file:format_error(Reason),
-	    wxDialog:showModal(wxMessageDialog:new(Parent, FailMsg))
+	    MD = wxMessageDialog:new(Parent, FailMsg),
+	    wxDialog:showModal(MD),
+	    wxDialog:destroy(MD)
     end.

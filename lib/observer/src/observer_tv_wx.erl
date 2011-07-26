@@ -25,6 +25,8 @@
 
 -export([get_table_list/1]). %% RPC called move to runtime tools?
 
+-export([get_wx_parent/1, interval_dialog/5]).
+
 -import(observer_pro_wx, [to_str/1]).
 
 -behaviour(wx_object).

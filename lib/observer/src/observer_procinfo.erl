@@ -65,37 +65,36 @@ start(Node, Process, ParentFrame, Parent, View) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init([Node, Process, ParentFrame, Parent, View]) ->
-    State = #procinfo_state{parent = Parent,
-			    node = Node,
-			    pid = Process
-			   },
-    ItemList = generate_itemlist(State, View),
-    Module = case process_info(Process, registered_name) of
-		 [] ->
-		     {initial_call, {M, _, _}} = rpc:call(Node, erlang, process_info, [Process, initial_call]),
-		     M;
-		 {registered_name, M} ->
-		     M
-	     end,
-    {Frame, STC, CheckListBox, CheckSz, MainSz} = setup(ParentFrame, Node, Process, ItemList, Module, View),
-    {Frame, State#procinfo_state{frame = Frame,
-				 module = Module,
-				 styled_txtctrl = STC,
-				 checklistbox = CheckListBox,
-				 main_sizer = MainSz,
-				 checkbox_sizer = CheckSz,
-				 current_view = View}}.
+    try
+	State = #procinfo_state{parent = Parent,
+				node = Node,
+				pid = Process
+			       },
+	ItemList = generate_itemlist(State, View),
+	Module = case observer_wx:try_rpc(Node, erlang, process_info, [Process, registered_name]) of
+		     [] ->
+			 {initial_call, {M, _, _}} = observer_wx:try_rpc(Node, erlang, process_info, [Process, initial_call]),
+			 M;
+		     {registered_name, M} ->
+			 M
+		 end,
+	{Frame, STC, CheckListBox, CheckSz, MainSz} = setup(ParentFrame, Node, Process, ItemList, Module, View),
+	{Frame, State#procinfo_state{frame = Frame,
+				     module = Module,
+				     styled_txtctrl = STC,
+				     checklistbox = CheckListBox,
+				     main_sizer = MainSz,
+				     checkbox_sizer = CheckSz,
+				     current_view = View}}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(ParentFrame, Node),
+	    {stop, badrpc, #procinfo_state{}}
+    end.
+
 
 setup(ParentFrame, Node, Pid, ItemList, Module, View) ->
-    Title = case View of
-		procinfo ->
-		    "Process information: ";
-		module_info ->
-		    "Module information: ";
-		module_code ->
-		    "Module code: "
-	    end,
-    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, Title ++ atom_to_list(Module), [{size, {900,900}}]),
+    Title = get_title(View, Node, Module),
+    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, Title, [{size, {900,900}}]),
     Panel = wxPanel:new(Frame, []),
     MainSz = wxBoxSizer:new(?wxHORIZONTAL),
     CheckSz = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, "View"}]),
@@ -137,9 +136,9 @@ setup(ParentFrame, Node, Pid, ItemList, Module, View) ->
 	procinfo ->
 	    load_procinfo_page(Stc, Frame, CheckSz, MainSz, Node, Pid, ItemList, Module);
 	module_info ->
-	    load_modinfo_page(Stc, Frame, CheckSz, MainSz, Module);
+	    load_modinfo_page(Stc, Frame, CheckSz, MainSz, Node, Module);
 	module_code ->
-	    load_modcode_page(Stc, Frame, CheckSz, MainSz, Module)
+	    load_modcode_page(Stc, Frame, CheckSz, MainSz, Node, Module)
     end,
     {Frame, Stc, CheckListBox, CheckSz, MainSz}.
 
@@ -230,6 +229,17 @@ create_styled_txtctrl(Parent, View) ->
     wxStyledTextCtrl:setKeyWords(Stc, 0, KeyWords),
     Stc.
 
+
+get_title(procinfo, Node, Module) ->
+    "Process information: " ++ atom_to_list(Node) ++ ":"
+	++ atom_to_list(Module);
+get_title(module_info, Node, Module) ->
+    "Module information: " ++ atom_to_list(Node) ++ ":"
+	++ atom_to_list(Module);
+get_title(module_code, Node, Module) ->
+    "Module code: " ++ atom_to_list(Node) ++ ":"
+	++ atom_to_list(Module).
+
 get_erl_keywords() ->
     L = ["after","begin","case","try","cond","catch","andalso","orelse",
 	 "end","fun","if","let","of","query","receive","when","bnot","not",
@@ -249,11 +259,11 @@ get_modinfo_keywords() ->
 
 get_formatted_values(Node, Process, ItemList) ->
     TagList = [Tag || {Tag, Bool} <- ItemList, Bool =:= true],
-    Values = rpc:call(Node, erlang, process_info, [Process, TagList]),
+    Values = observer_wx:try_rpc(Node, erlang, process_info, [Process, TagList]),
     lists:flatten([io_lib:format("~p~n", [V]) || V <- Values]).
 
-get_formatted_modinfo(Module) ->
-    Info = Module:module_info(),
+get_formatted_modinfo(Node, Module) ->
+    Info = observer_wx:try_rpc(Node, Module, module_info, []),
     lists:flatten([io_lib:format("~p~n", [I]) || I <- Info]).
 
 get_src_file(Module) ->
@@ -282,19 +292,19 @@ set_text(Stc, File, file) ->
     wxStyledTextCtrl:setReadOnly(Stc, true).
     
 load_procinfo_page(Stc, Frame, CheckSz, MainSz, Node, Process, ItemList, Module) ->
-    wxTopLevelWindow:setTitle(Frame, "Process information: " ++ atom_to_list(Module)),
+    wxTopLevelWindow:setTitle(Frame, get_title(procinfo, Node, Module)),
     show_check_sizer(CheckSz, MainSz, true),
     wxStyledTextCtrl:setKeyWords(Stc, 0, get_procinfo_keywords()),
     Txt = get_formatted_values(Node, Process, ItemList),
     set_text(Stc, Txt, text).
-load_modinfo_page(Stc, Frame, CheckSz, MainSz, Module) ->
-    wxTopLevelWindow:setTitle(Frame, "Module information: " ++ atom_to_list(Module)),
+load_modinfo_page(Stc, Frame, CheckSz, MainSz, Node, Module) ->
+    wxTopLevelWindow:setTitle(Frame, get_title(module_info, Node, Module)),
     show_check_sizer(CheckSz, MainSz, false),
     wxStyledTextCtrl:setKeyWords(Stc, 0, get_modinfo_keywords()),
-    Txt = get_formatted_modinfo(Module),
+    Txt = get_formatted_modinfo(Node, Module),
     set_text(Stc, Txt, text).
-load_modcode_page(Stc, Frame, CheckSz, MainSz, Module) ->
-    wxTopLevelWindow:setTitle(Frame, "Module code: " ++ atom_to_list(Module)),
+load_modcode_page(Stc, Frame, CheckSz, MainSz, Node, Module) ->
+    wxTopLevelWindow:setTitle(Frame, get_title(module_code, Node, Module)),
     show_check_sizer(CheckSz, MainSz, false),
     wxStyledTextCtrl:setKeyWords(Stc, 0, get_erl_keywords()),
     case get_src_file(Module) of
@@ -328,23 +338,36 @@ handle_event(#wx{id = ?CLOSE,
 
 handle_event(#wx{id = ?REFRESH, 
 		 event = #wxCommand{type = command_menu_selected}},
-	     #procinfo_state{current_view = View,
+	     #procinfo_state{frame = Frame,
+			     current_view = View,
 			     styled_txtctrl = Stc,
 			     node = Node,
 			     pid = Process,
 			     itemlist = ItemList} = State) when View =:= procinfo ->
-    Text = get_formatted_values(Node, Process, ItemList),
-    set_text(Stc, Text, text),
-    {noreply, State};
+    try
+	Text = get_formatted_values(Node, Process, ItemList),
+	set_text(Stc, Text, text),
+	{noreply, State}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(#wx{id = ?REFRESH, 
-		event = #wxCommand{type = command_menu_selected}},
-	    #procinfo_state{current_view = View,
-			    styled_txtctrl = Stc,
-			    module = Module} = State) when View =:= module_info ->
-    Text = get_formatted_modinfo(Module),
-    set_text(Stc, Text, text),
-    {noreply, State};
+		 event = #wxCommand{type = command_menu_selected}},
+	     #procinfo_state{frame = Frame,
+			     node = Node,
+			     current_view = View,
+			     styled_txtctrl = Stc,
+			     module = Module} = State) when View =:= module_info ->
+    try
+	Text = get_formatted_modinfo(Node, Module),
+	set_text(Stc, Text, text),
+	{noreply, State}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(#wx{id = ?REFRESH, 
 		 event = #wxCommand{type = command_menu_selected}},
@@ -370,65 +393,88 @@ handle_event(#wx{id = ?PROC_INFO,
 			     node = Node,
 			     pid = Process,
 			     itemlist = ItemList} = State) ->
-    load_procinfo_page(Stc, Frame, CheckSz, MainSz, Node, Process, ItemList, Module),
-    {noreply, State#procinfo_state{current_view = procinfo}};
-
+    try
+	load_procinfo_page(Stc, Frame, CheckSz, MainSz, Node, Process, ItemList, Module),
+	{noreply, State#procinfo_state{current_view = procinfo}}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(#wx{id = ?MODULE_INFO, 
 		 event = #wxCommand{type = command_menu_selected}},
 	     #procinfo_state{frame = Frame,
+			     node = Node,
 			     main_sizer = MainSz,
 			     checkbox_sizer = CheckSz,
 			     styled_txtctrl = Stc,
 			     module = Module} = State) ->
-    load_modinfo_page(Stc, Frame, CheckSz, MainSz, Module),
-    {noreply, State#procinfo_state{current_view = module_info}};
+    try
+	load_modinfo_page(Stc, Frame, CheckSz, MainSz, Node, Module),
+	{noreply, State#procinfo_state{current_view = module_info}}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(#wx{id = ?MODULE_CODE, 
 		 event = #wxCommand{type = command_menu_selected}},
 	     #procinfo_state{frame = Frame,
+			     node = Node,
 			     main_sizer = MainSz,
 			     checkbox_sizer = CheckSz,
 			     styled_txtctrl = Stc,
 			     module = Module} = State) ->
-    load_modcode_page(Stc, Frame, CheckSz, MainSz, Module),
+    load_modcode_page(Stc, Frame, CheckSz, MainSz, Node, Module),
     {noreply, State#procinfo_state{current_view = module_code}};
 
 handle_event(#wx{event = #wxCommand{type = command_checklistbox_toggled,
 				    commandInt = Index},
 		 obj = CheckListbox},
-	     #procinfo_state{node = Node,
+	     #procinfo_state{frame = Frame,
+			     node = Node,
 			     pid = Process,
 			     styled_txtctrl = Stc,
 			     itemlist = ItemList} = State) ->
-    {Tag, _} = lists:nth(Index+1, ItemList),
-    ItemList2 = case wxCheckListBox:isChecked(CheckListbox, Index) of
-		    true ->
-			lists:keyreplace(Tag, 1, ItemList, {Tag, true});
-		    false ->
-			lists:keyreplace(Tag, 1, ItemList, {Tag, false})
-		end,
-    Txt = get_formatted_values(Node, Process, ItemList2),
-    set_text(Stc, Txt, text),
-    {noreply, State#procinfo_state{itemlist = ItemList2}};
+    try
+	{Tag, _} = lists:nth(Index+1, ItemList),
+	ItemList2 = case wxCheckListBox:isChecked(CheckListbox, Index) of
+			true ->
+			    lists:keyreplace(Tag, 1, ItemList, {Tag, true});
+			false ->
+			    lists:keyreplace(Tag, 1, ItemList, {Tag, false})
+		    end,
+	Txt = get_formatted_values(Node, Process, ItemList2),
+	set_text(Stc, Txt, text),
+	{noreply, State#procinfo_state{itemlist = ItemList2}}
+
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(#wx{id = ?SELECT_ALL,
 		 event = #wxCommand{type = command_button_clicked},
 		 userData = Bool},
-	     #procinfo_state{node = Node,
+	     #procinfo_state{frame = Frame,
+			     node = Node,
 			     pid = Process,
 			     itemlist = ItemList,
 			     styled_txtctrl = Stc,
 			     checklistbox = CheckListBox} = State) ->
-    check_boxes(CheckListBox, Bool, all),
-    ItemList2 = lists:keymap(fun(_) ->
-				     Bool
-			     end,
-			     2, ItemList),
-    Txt = get_formatted_values(Node, Process, ItemList2),
-    set_text(Stc, Txt, text),
-    {noreply, State#procinfo_state{itemlist = ItemList2}};
-    
+    try
+	check_boxes(CheckListBox, Bool, all),
+	ItemList2 = lists:keymap(fun(_) ->
+					 Bool
+				 end,
+				 2, ItemList),
+	Txt = get_formatted_values(Node, Process, ItemList2),
+	set_text(Stc, Txt, text),
+	{noreply, State#procinfo_state{itemlist = ItemList2}}
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    {stop, badrpc, State}
+    end;
 
 handle_event(Event, State) ->
     io:format("~p: ~p, Handle event: ~p~n", [?MODULE, ?LINE, Event]),
