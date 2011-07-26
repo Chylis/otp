@@ -49,6 +49,7 @@
 -define(ID_TRACE_ALL_MENU, 207).
 -define(ID_TRACE_NEW_MENU, 208).
 -define(ID_NO_OF_LINES, 209).
+-define(ID_ACCUMULATE, 210).
 -define(ID_MODULE_INFO, 211).
 
 -define(FIRST_NODES_MENU_ID, 1000).
@@ -158,8 +159,9 @@ create_pro_menu(Parent) ->
 		    [#create_menu{id = ?ID_REFRESH, text = "Refresh"},
 		     #create_menu{id = ?ID_REFRESH_INTERVAL, text = "Refresh Interval"}]},
 		   {"Options",
-		    [#create_menu{id = ?ID_NO_OF_LINES, text = "Number of lines"},
-		     #create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"}]},
+		    [#create_menu{id = ?ID_DUMP_TO_FILE, text = "Dump to file"},
+		     #create_menu{id = ?ID_ACCUMULATE, text = "Accumulate", type = check},
+		     #create_menu{id = ?ID_NO_OF_LINES, text = "Number of lines"}]},
 		   {"Trace",
 		    [#create_menu{id = ?ID_TRACEMENU, text = "Trace selected processes"},
 		     #create_menu{id = ?ID_TRACE_NEW_MENU, text = "Trace new processes"},
@@ -168,9 +170,11 @@ create_pro_menu(Parent) ->
     observer_wx:create_menus(Parent, MenuEntries).
 
 create_popup_menu(ParentFrame) ->
-    MiniFrame = wxMiniFrame:new(ParentFrame, ?wxID_ANY, "Options"),
+    MiniFrame = wxMiniFrame:new(ParentFrame, ?wxID_ANY, "Options", [{style, ?wxFRAME_FLOAT_ON_PARENT}]),
     Panel = wxPanel:new(MiniFrame),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
+    TraceBtn = wxButton:new(Panel, ?ID_TRACEMENU, [{label, "Trace selected"},
+						   {style, ?wxNO_BORDER}]),
     ProcBtn = wxButton:new(Panel, ?ID_PROC, [{label, "Process info"},
 					     {style, ?wxNO_BORDER}]),
     ModInfoBtn = wxButton:new(Panel, ?ID_MODULE_INFO, [{label, "Module info"},
@@ -180,11 +184,12 @@ create_popup_menu(ParentFrame) ->
     KillBtn = wxButton:new(Panel, ?ID_KILL, [{label, "Kill process"},
 					     {style, ?wxNO_BORDER}]),
     
+    wxButton:connect(TraceBtn, command_button_clicked),
     wxButton:connect(ProcBtn, command_button_clicked),
     wxButton:connect(ModInfoBtn, command_button_clicked),
     wxButton:connect(CodeBtn, command_button_clicked),
     wxButton:connect(KillBtn, command_button_clicked),
-    
+    wxSizer:add(Sizer, TraceBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(Sizer, ProcBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(Sizer, ModInfoBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(Sizer, CodeBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
@@ -236,6 +241,9 @@ get_node() ->
 	{node, Node} ->
 	    Node
     end.
+
+change_accum(Bool) ->
+    etop_server ! {config, {accumulate, Bool}}.
 
 change_lines(Int) when is_integer(Int) ->
     etop_server ! {config, {lines, Int}}.
@@ -439,10 +447,8 @@ line_dialog(ParentFrame, OldLines, Holder, Dir) ->
 start_procinfo(Node, Pid, Frame, Opened, View) ->
     case lists:member(Pid, Opened) of
 	true ->
-	    io:format("TRUE!~n"),
 	    Opened;
 	false ->
-	    io:format("FALSE!~n"),
 	    observer_procinfo:start(Node, Pid, Frame, self(), View),
 	    [Pid | Opened]
     end.
@@ -554,6 +560,21 @@ handle_event(#wx{id = ?ID_DUMP_TO_FILE},
     end,
     {noreply, State};
 
+handle_event(#wx{id = ?ID_ACCUMULATE, event = #wxCommand{type = command_menu_selected,
+							 commandInt = CmdInt}},
+	     #pro_wx_state{holder = Holder,
+			   sort_dir = Dir} = State) when CmdInt =:= 1->
+    change_accum(true),
+    refresh_grid(Holder, Dir),
+    {noreply, State};
+
+handle_event(#wx{id = ?ID_ACCUMULATE, event = #wxCommand{type = command_menu_selected,
+							 commandInt = CmdInt}},
+	     #pro_wx_state{holder = Holder,
+			   sort_dir = Dir} = State) when CmdInt =:= 0 ->
+    change_accum(false),
+    refresh_grid(Holder, Dir),
+    {noreply, State};
 
 handle_event(#wx{id = ?ID_NO_OF_LINES, event = #wxCommand{type = command_menu_selected}}, 
 	     #pro_wx_state{panel = Panel,
@@ -565,7 +586,6 @@ handle_event(#wx{id = ?ID_NO_OF_LINES, event = #wxCommand{type = command_menu_se
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
 	     #pro_wx_state{sort_dir = Dir, holder = Holder} = State) ->
-    io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
     refresh_grid(Holder, Dir),
     {noreply, State};
 
@@ -632,13 +652,13 @@ handle_event(#wx{id = ?ID_VIEW},
     Opened2 = start_procinfo(Node, Pid, Panel, Opened, module_code),
     {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
     
-handle_event(#wx{id = ?ID_TRACEMENU, event = #wxCommand{type = command_menu_selected}}, 
+handle_event(#wx{id = ?ID_TRACEMENU}, 
 	     #pro_wx_state{trace_options = Options,
 			   match_specs = MatchSpecs,
 			   holder = Holder,
 			   grid = Grid,
 			   tracemenu_opened = false, 
-			   panel = Panel} = State) ->
+			   panel = Panel} = State)  ->
     Node = get_node(),
     IndexList = get_selected_items(Grid),
     PidList = get_selected_pids(Holder, IndexList),

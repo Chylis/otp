@@ -83,7 +83,8 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Setup main window
     
     Frame = wxFrame:new(ParentFrame, ?TRACEOPTS_FRAME, "Trace options",
-			[{size, {400, 500}}]),
+			[{style, ?wxRESIZE_BORDER bor ?wxCLOSE_BOX},
+			 {size, {400, 500}}]),
     Panel = wxPanel:new(Frame, []),
     MainSz = wxBoxSizer:new(?wxVERTICAL),
     Notebook = wxNotebook:new(Panel, ?wxID_ANY),
@@ -193,7 +194,8 @@ setup(ParentFrame, Node, TraceOpts, TracedFuncs, MatchSpecs) ->
 				      all_link = LinkAllRadio,
 				      first_link = LinkFirstRadio},
 		   all_link = LinkAllRadio},
-
+    
+    
     wxButton:connect(OKBtn, command_button_clicked, [{userData, trace_options}]),
     wxButton:connect(CancelBtn, command_button_clicked, [{userData, trace_options}]),
     wxFrame:connect(Frame, close_window, []),
@@ -463,7 +465,8 @@ create_module_popup(Parent, ModuleName, TracedDict) ->
     Choices = lists:sort([{Name, Arity} || {Name, Arity} <- Functions, not(erl_internal:guard_bif(Name, Arity))]),
     ParsedChoices = parse_function_names(Choices),
 
-    Dialog = wxDialog:new(Parent, ?MODULEPOPUP_DIALOG, ModuleName),
+    Dialog = wxDialog:new(Parent, ?MODULEPOPUP_DIALOG, ModuleName,
+			 [{style, ?wxDEFAULT_FRAME_STYLE}]),
     Panel = wxPanel:new(Dialog),
     MainSz = wxBoxSizer:new(?wxVERTICAL),
 
@@ -711,7 +714,8 @@ handle_event(#wx{event = #wxTree{type = command_tree_item_activated,
 			      match_specs = MatchSpecs,
 			      popup_open = false} = State) ->
     
-    Dialog = wxDialog:new(Frame, ?MATCH_POPUP_DIALOG, "Match specification"),
+    Dialog = wxDialog:new(Frame, ?MATCH_POPUP_DIALOG, "Match specification",
+			 [{style, ?wxDEFAULT_FRAME_STYLE}]),
     {MatchPanel, MatchSz, StyledTxtCtrl, ListBox} = create_matchspec_page(Dialog, MatchSpecs, matchpopup),
     ApplyBtn = wxButton:new(MatchPanel, ?wxID_APPLY),
     CancelBtn = wxButton:new(MatchPanel, ?wxID_CANCEL, []),

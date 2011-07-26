@@ -56,7 +56,9 @@ init([Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid]) ->
 
 create_window(ParentFrame, TraceOpts) ->
     %% Create the window
-    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Tracer", [{size, {900, 900}}]),
+    Frame = wxFrame:new(ParentFrame, ?wxID_ANY, "Tracer", 
+			[{style, ?wxDEFAULT_FRAME_STYLE},
+			 {size, {900, 900}}]),
     wxFrame:connect(Frame, close_window,[{skip,true}]),
     Panel = wxPanel:new(Frame, []),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
@@ -66,30 +68,28 @@ create_window(ParentFrame, TraceOpts) ->
     create_menues(MenuBar),
     wxFrame:setMenuBar(Frame, MenuBar),
     wxMenu:connect(Frame, command_menu_selected, []),
-
+    
     %% Buttons
     ToggleButton = wxToggleButton:new(Panel, ?wxID_ANY, "Start Trace", []),
     wxSizer:add(Sizer, ToggleButton, [{flag, ?wxALL},
 				      {border, 5}]),
     wxMenu:connect(ToggleButton, command_togglebutton_clicked, []),
-
-    %% Text control
-    TextCtrl = wxTextCtrl:new(Panel, ?wxID_ANY,
+    
+    TxtCtrl =  wxTextCtrl:new(Panel, ?wxID_ANY,
 			      [{style,?wxTE_READONLY bor
 				    ?wxTE_MULTILINE},
 			       {size, {400, 300}}]),
-
-    wxSizer:add(Sizer, TextCtrl, [{proportion, 1},
- 				  {flag, ?wxEXPAND}]),
-
+    
+    wxSizer:add(Sizer, TxtCtrl, [{proportion, 1},
+				 {flag, ?wxEXPAND}]),
+    
     %% Display window
     wxWindow:setSizer(Panel, Sizer),
     wxFrame:show(Frame),
     #state{frame = Frame,
-	   text_ctrl = TextCtrl, 
+	   text_ctrl = TxtCtrl, 
 	   toggle_button = ToggleButton,
 	   trace_options = TraceOpts#trace_options{main_window = false}}.
-	   
 
 create_menues(MenuBar) ->
     observer_wx:create_menu(
@@ -205,7 +205,7 @@ handle_event(#wx{event = #wxCommand{type = command_togglebutton_clicked, command
 		    trace_options = TraceOpts, 
 		    text_ctrl = TextCtrl, 
 		    toggle_button = ToggleBtn} = State) ->
-
+    
     start_trace(Node, TracedProcs, TracedDict, TraceOpts),
     wxTextCtrl:appendText(TextCtrl, "Start Trace:\n"),
     wxToggleButton:setLabel(ToggleBtn, "Stop Trace"),
@@ -232,8 +232,6 @@ handle_info({updated_traceopts,
 	     TraceOpts,
 	     MatchSpecs,
 	     TracedFuncs}, State) ->
-    io:format("~p~p updating traceoptions~n TraceOpts: ~p~n MatchSpecs ~p~n TracedFuncs ~p~n",
-	      [?MODULE, ?LINE, TraceOpts, MatchSpecs, TracedFuncs]),
     {noreply, State#state{trace_options = TraceOpts,
 			  match_specs = MatchSpecs,
 			  traced_funcs = TracedFuncs,
@@ -370,9 +368,7 @@ trace_functions(TracedDict) ->
 		    lists:foreach(fun(#traced_func{func_name = Function,
 						   arity = Arity,
 						   match_spec = #match_spec{term_ms = MS}}) ->
-					  Res = dbg:tpl({KeyAtom, Function, Arity}, MS),
-					  io:format("Module: ~p~nFunction: ~p Arity: ~p~nMS: ~p~nResult: ~p~n",
-						    [KeyAtom, Function, Arity, MS, Res])
+					  dbg:tpl({KeyAtom, Function, Arity}, MS)
 				  end,
 				  RecordList),
 		    acc_in
@@ -431,7 +427,6 @@ read_settings(Filename, #state{frame = Frame} = State) ->
 
 
 parse_settings([], {TraceOpts, MatchSpecs}) ->
-    io:format("MatchSpecs: ~p~n", [MatchSpecs]),
     {TraceOpts, MatchSpecs};
 parse_settings([{send, Bool} | T], {Opts, MS}) ->
     parse_settings(T, {Opts#trace_options{send = Bool}, MS});

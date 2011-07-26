@@ -35,6 +35,7 @@
 
 -define(ID_PING, 1).
 -define(ID_CONNECT, 2).
+-define(ID_NOTEBOOK, 3).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
@@ -92,7 +93,7 @@ setup(#state{frame = Frame} = State) ->
     
     %% Setup panels
     Panel = wxPanel:new(Frame, []),
-    Notebook = wxNotebook:new(Panel, 1, [{style, ?wxBK_DEFAULT}]),
+    Notebook = wxNotebook:new(Panel, ?ID_NOTEBOOK, [{style, ?wxBK_DEFAULT}]),
   
     %% Setup sizer
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
@@ -135,7 +136,8 @@ setup(#state{frame = Frame} = State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%Callbacks
-handle_event(#wx{obj = Notebook, event = #wxNotebook{type = command_notebook_page_changed}},
+handle_event(#wx{obj = Notebook, id = ?ID_NOTEBOOK,
+		 event = #wxNotebook{type = command_notebook_page_changed}},
 	     #state{active_tab=Previous, node=Node, notebook = Notebook} = State) ->
     io:format("Command notebook changed ~n"),
     Pid = get_active_pid(State),
