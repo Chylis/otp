@@ -358,11 +358,10 @@ show_ms_in_savedlistbox(MatchSpecList) ->
 find_and_format_ms(Selection, [ #match_spec{str_ms = Spec, alias = Alias, fun2ms = Fun} | T ]) ->
     case ((Selection =:= Spec) or (Selection =:= Alias)) or (Selection =:= Fun) of
 	true ->
-	    case Fun of
-		undefined ->
+	    if Selection =:= Alias ->
 		    Spec;
-		Fun ->
-		    Fun
+	       true ->
+		    Selection
 	    end;
 	false ->
 	    find_and_format_ms(Selection, T)
