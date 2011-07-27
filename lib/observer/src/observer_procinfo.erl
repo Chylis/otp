@@ -257,7 +257,15 @@ get_modinfo_keywords() ->
 get_formatted_values(Node, Process, ItemList) ->
     TagList = [Tag || {Tag, Bool} <- ItemList, Bool =:= true],
     Values = observer_wx:try_rpc(Node, erlang, process_info, [Process, TagList]),
-    lists:flatten([io_lib:format("~p~n", [V]) || V <- Values]).
+    %%lists:flatten([io_lib:format("~p~n", [V]) || V <- Values,]).
+    lists:flatten(format_value(Values, [])).
+
+format_value([], Acc) ->
+    lists:reverse(Acc);
+format_value([{backtrace, Bin} | T], Acc) ->
+    format_value(T, [io_lib:format("{backtrace,~s}~n", [binary_to_list(Bin)]) | Acc]);
+format_value([H|T], Acc) ->
+    format_value(T, [io_lib:format("~p~n", [H]) | Acc]).
 
 get_formatted_modinfo(Node, Module) ->
     Info = observer_wx:try_rpc(Node, Module, module_info, []),
