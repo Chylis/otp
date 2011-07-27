@@ -10,10 +10,10 @@
 -include_lib("wx/include/wx.hrl").
 -include("observer_defs.hrl").
 
--define(CLOSE, 1).
--define(REFRESH, 2).
--define(SELECT_ALL, 3).
--define(ID_NOTEBOOK, 4).
+-define(CLOSE, 601).
+-define(REFRESH, 602).
+-define(SELECT_ALL, 603).
+-define(ID_NOTEBOOK, 604).
 
 -record(procinfo_state, {parent,
 			 frame,

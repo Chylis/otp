@@ -32,23 +32,23 @@
 -record(boxes, {send, 'receive', functions, events,
 		on_spawn, on_link, all_spawn, all_link}).
 
--define(TRACEOPTS_FRAME, 9).
+-define(TRACEOPTS_FRAME, 501).
 
--define(MATCHPAGE_ADDFUN, 13).
--define(MATCHPAGE_ADDMS, 14).
--define(MATCHPAGE_ADDMS_ALIAS, 15).
--define(MATCHPAGE_LISTBOX, 16).
+-define(MATCHPAGE_ADDFUN, 502).
+-define(MATCHPAGE_ADDMS, 503).
+-define(MATCHPAGE_ADDMS_ALIAS, 504).
+-define(MATCHPAGE_LISTBOX, 505).
 
--define(MATCH_POPUP_DIALOG, 17).
+-define(MATCH_POPUP_DIALOG, 506).
 
--define(MODULEPOPUP_SELECT, 20).
--define(MODULEPOPUP_SELALL, 21).
--define(MODULEPOPUP_CHECKLISTBOX, 22).
--define(MODULEPOPUP_TXTCTRL, 23).
--define(MODULEPOPUP_DIALOG, 24).
+-define(MODULEPOPUP_SELECT, 507).
+-define(MODULEPOPUP_SELALL, 508).
+-define(MODULEPOPUP_CHECKLISTBOX, 509).
+-define(MODULEPOPUP_TXTCTRL, 510).
+-define(MODULEPOPUP_DIALOG, 511).
 
--define(FUNCTIONPAGE_LISTBOX, 25).
--define(FUNCTIONPAGE_TXTCTRL, 26).
+-define(FUNCTIONPAGE_LISTBOX, 512).
+-define(FUNCTIONPAGE_TXTCTRL, 513).
 
 
 start(ParentFrame, ParentPid, Node, TraceOpts, TracedFuncs, MatchSpecs) ->

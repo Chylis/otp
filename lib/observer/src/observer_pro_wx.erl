@@ -34,12 +34,12 @@
 -define(COL_PID,  0).
 -define(COL_NAME, 1).
 -define(COL_TIME, 2).
--define(COL_REDS,  3).
+-define(COL_REDS, 3).
 -define(COL_MEM, 4).
 -define(COL_MSG,  5).
 -define(COL_FUN,  6).
 
--define(ID_KILL, 200).
+-define(ID_KILL, 201).
 -define(ID_PROC, 202).
 -define(ID_REFRESH, 203).
 -define(ID_REFRESH_INTERVAL, 204).
@@ -49,9 +49,6 @@
 -define(ID_TRACE_NEW_MENU, 208).
 -define(ID_NO_OF_LINES, 209).
 -define(ID_ACCUMULATE, 210).
-
--define(FIRST_NODES_MENU_ID, 1000).
--define(LAST_NODES_MENU_ID,  2000).
 
 -define(START_LINES, 50). %% hardcoded startvalue representing the number of visible lines
 

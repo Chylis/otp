@@ -9,12 +9,12 @@
 -include_lib("wx/include/wx.hrl").
 -include("observer_defs.hrl").
 
--define(OPTIONS, 1).
--define(SAVE_BUFFER, 2).
--define(CLOSE, 3).
--define(CLEAR, 4).
--define(SAVE_TRACEOPTS, 5).
--define(LOAD_TRACEOPTS, 6).
+-define(OPTIONS, 301).
+-define(SAVE_BUFFER, 302).
+-define(CLOSE, 303).
+-define(CLEAR, 304).
+-define(SAVE_TRACEOPTS, 305).
+-define(LOAD_TRACEOPTS, 306).
 
 
 -record(state, {
@@ -250,10 +250,20 @@ handle_info(Any, State) ->
     {noreply, State}.
 
 
-terminate(Reason, #state{frame = Frame}) ->
-    io:format("~p terminating tracemenu. Reason: ~p~n", [?MODULE, Reason]),
-    wxFrame:destroy(Frame),
-    ok.
+terminate(Reason, #state{node = Node,
+			 frame = Frame}) ->
+    try
+	case observer_wx:try_rpc(Node, erlang, whereis, [dbg]) of
+	    undefined -> fine;
+	    Pid -> exit(Pid, kill)
+	end,
+	io:format("~p terminating tracemenu. Reason: ~p~n", [?MODULE, Reason]),
+	wxFrame:destroy(Frame),
+	ok
+    catch error:{badrpc, _} ->
+	    observer_wx:return_to_localnode(Frame, Node),
+	    wxFrame:destroy(Frame)
+    end.
 
 code_change(_, _, State) ->
     {stop, not_yet_implemented, State}.
