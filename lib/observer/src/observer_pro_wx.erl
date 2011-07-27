@@ -40,7 +40,6 @@
 -define(COL_FUN,  6).
 
 -define(ID_KILL, 200).
--define(ID_VIEW, 201).
 -define(ID_PROC, 202).
 -define(ID_REFRESH, 203).
 -define(ID_REFRESH_INTERVAL, 204).
@@ -50,10 +49,11 @@
 -define(ID_TRACE_NEW_MENU, 208).
 -define(ID_NO_OF_LINES, 209).
 -define(ID_ACCUMULATE, 210).
--define(ID_MODULE_INFO, 211).
 
 -define(FIRST_NODES_MENU_ID, 1000).
 -define(LAST_NODES_MENU_ID,  2000).
+
+-define(START_LINES, 50). %% hardcoded startvalue representing the number of visible lines
 
 %% Records
 -record(attrs, {even, odd, deleted, changed, searched}).
@@ -76,7 +76,7 @@
 		       tracemenu_opened,
 		       procinfo_menu_pids = [],
 		       selected_pid,
-		       sort_dir = decr,
+		       sort_dir = decr, % decr::atom | incr::incr
 		       holder}).
 
 start_link(Notebook, Parent) ->
@@ -89,7 +89,7 @@ init([Notebook, Parent]) ->
     SortDir = decr,
     Attrs = create_attrs(),
     Self = self(),
-    change_lines(50),
+    change_lines(?START_LINES),
     Info = etop:update(Config, SortDir),
     {Holder, HolderMon} = spawn_monitor(fun() ->
 						init_table_holder(Self, 
@@ -177,22 +177,14 @@ create_popup_menu(ParentFrame) ->
 						   {style, ?wxNO_BORDER}]),
     ProcBtn = wxButton:new(Panel, ?ID_PROC, [{label, "Process info"},
 					     {style, ?wxNO_BORDER}]),
-    ModInfoBtn = wxButton:new(Panel, ?ID_MODULE_INFO, [{label, "Module info"},
-						       {style, ?wxNO_BORDER}]),
-    CodeBtn = wxButton:new(Panel, ?ID_VIEW, [{label, "Module code"},
-					     {style, ?wxNO_BORDER}]),
     KillBtn = wxButton:new(Panel, ?ID_KILL, [{label, "Kill process"},
 					     {style, ?wxNO_BORDER}]),
     
     wxButton:connect(TraceBtn, command_button_clicked),
     wxButton:connect(ProcBtn, command_button_clicked),
-    wxButton:connect(ModInfoBtn, command_button_clicked),
-    wxButton:connect(CodeBtn, command_button_clicked),
     wxButton:connect(KillBtn, command_button_clicked),
     wxSizer:add(Sizer, TraceBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(Sizer, ProcBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
-    wxSizer:add(Sizer, ModInfoBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
-    wxSizer:add(Sizer, CodeBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxSizer:add(Sizer, KillBtn, [{flag, ?wxEXPAND}, {proportion, 1}]),
     wxPanel:setSizer(Panel, Sizer),
     wxSizer:setSizeHints(Sizer, MiniFrame), 
@@ -444,12 +436,12 @@ line_dialog(ParentFrame, OldLines, Holder, Dir) ->
     wxDialog:show(Dialog).
 
 
-start_procinfo(Node, Pid, Frame, Opened, View) ->
+start_procinfo(Node, Pid, Frame, Opened) ->
     case lists:member(Pid, Opened) of
 	true ->
 	    Opened;
 	false ->
-	    observer_procinfo:start(Node, Pid, Frame, self(), View),
+	    observer_procinfo:start(Node, Pid, Frame, self()),
 	    [Pid | Opened]
     end.
 
@@ -620,15 +612,6 @@ handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{popup_menu = Pop,
     end,
     {noreply, State#pro_wx_state{selected_pid = undefined}};
 
-handle_event(#wx{id = ?ID_MODULE_INFO},
-	     #pro_wx_state{panel = Panel,
-			   popup_menu = Pop,
-			   selected_pid = Pid,
-			   procinfo_menu_pids = Opened} = State)  ->
-    wxWindow:show(Pop, [{show, false}]),
-    Node = get_node(),
-    Opened2 = start_procinfo(Node, Pid, Panel, Opened, module_info),
-        {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
 
 handle_event(#wx{id = ?ID_PROC},
 	     #pro_wx_state{panel = Panel,
@@ -637,17 +620,7 @@ handle_event(#wx{id = ?ID_PROC},
 			   procinfo_menu_pids = Opened} = State) ->
     wxWindow:show(Pop, [{show, false}]),
     Node = get_node(),
-    Opened2 = start_procinfo(Node, Pid, Panel, Opened, procinfo),
-    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
-
-handle_event(#wx{id = ?ID_VIEW},
-	     #pro_wx_state{panel = Panel,
-			   popup_menu = Pop,
-			   selected_pid = Pid,
-			   procinfo_menu_pids = Opened} = State) ->
-    wxWindow:show(Pop, [{show, false}]),
-    Node = get_node(),
-    Opened2 = start_procinfo(Node, Pid, Panel, Opened, module_code),
+    Opened2 = start_procinfo(Node, Pid, Panel, Opened),
     {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
     
 handle_event(#wx{id = ?ID_TRACEMENU}, 
@@ -756,7 +729,7 @@ handle_event(#wx{event = #wxList{type = command_list_item_activated,
 	{error, undefined} ->
 	    {noreply, State};
 	{ok, Pid} when is_pid(Pid) ->
-	    Opened2 = start_procinfo(Node, Pid, Panel, Opened, procinfo),
+	    Opened2 = start_procinfo(Node, Pid, Panel, Opened),
 	    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}}
     end;
 

@@ -66,7 +66,8 @@ create_menus(Object, Menus) when is_list(Menus) ->
 
 init(_Args) ->
     wx:new(),
-    Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Observer", [{size, {1000, 500}}]),
+    Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Observer", [{size, {1000, 500}}, 
+							   {style, ?wxDEFAULT_FRAME_STYLE}]),
     IconFile = filename:join(code:priv_dir(observer), "erlang_observer.png"),
     Icon = wxIcon:new(IconFile, [{type,?wxBITMAP_TYPE_PNG}]),
     wxFrame:setIcon(Frame, Icon),
@@ -150,7 +151,6 @@ handle_event(#wx{event = #wxClose{}}, State) ->
 
 handle_event(#wx{id = ?wxID_EXIT, event = #wxCommand{type = command_menu_selected}}, State) ->
     io:format("~p ~p, you clicked close", [?MODULE, ?LINE]),
-    wxWindow:destroy(State#state.frame),
     {stop, normal, State};
 
 handle_event(#wx{id = ?wxID_HELP, event = #wxCommand{type = command_menu_selected}}, State) ->
@@ -264,7 +264,8 @@ handle_info(Info, State) ->
     io:format("~p, ~p, Handle info: ~p~n", [?MODULE, ?LINE, Info]),
     {noreply, State}.
 
-terminate(Reason, _State) ->
+terminate(Reason, #state{frame = Frame}) ->
+    wxFrame:destroy(Frame),
     io:format("~p terminating. Reason: ~p~n", [?MODULE, Reason]),
     ok.
 
