@@ -72,7 +72,8 @@
 		       refr_timer = false,
 		       tracemenu_opened,
 		       procinfo_menu_pids = [],
-		       selected_pid,
+		       selected_pids = [],
+		       last_selected,
 		       sort_dir = decr, % decr::atom | incr::incr
 		       holder}).
 
@@ -322,7 +323,32 @@ to_str(No) when is_integer(No) ->
     integer_to_list(No);
 to_str(ShouldNotGetHere) ->
     erlang:error({?MODULE, to_str, ShouldNotGetHere}).
-    
+
+clear_all(Grid) ->
+    lists:foreach(fun(I) ->
+			  wxListCtrl:setItemState(Grid, I, 0, ?wxLIST_STATE_SELECTED),
+			  wxListCtrl:setItemState(Grid, I, 0, ?wxLIST_STATE_FOCUSED)
+		  end,
+		  lists:seq(0, wxListCtrl:getItemCount(Grid))).
+
+set_selected_items(Grid, Holder, Pids) ->
+    Count = wxListCtrl:getItemCount(Grid),
+    set_selected_items(Grid, Holder, 0, Pids, Count, []).
+
+set_selected_items(_, _, Index, Pids, Max, Acc) when Pids =:= []; Index =:= Max ->
+    Acc;
+set_selected_items(Grid, Holder, Index, Pids, Max, Acc) ->
+    {ok, Pid} = get_row(Holder, Index, pid),
+    case lists:member(Pid, Pids) of
+	true ->
+	    wxListCtrl:setItemState(Grid, Index, 
+				    ?wxLIST_STATE_SELECTED, 
+				    ?wxLIST_STATE_SELECTED),
+	    set_selected_items(Grid, Holder, Index+1, lists:delete(Pid, Pids), Max, [Pid | Acc]);
+	false ->
+	    set_selected_items(Grid, Holder, Index+1, Pids, Max, Acc)
+    end.
+        
 get_selected_items(Grid) ->
     get_selected_items(Grid, -1, []).
     
@@ -418,9 +444,23 @@ line_dialog(ParentFrame, OldLines, Holder, Dir) ->
 		     [{callback, 
 		       fun(#wx{id = ?wxID_OK,
 			       event = #wxCommand{type = command_button_clicked}},_) ->
-			       try change_lines(list_to_integer(wxTextCtrl:getValue(TxtCtrl))),
-				    refresh_grid(Holder, Dir)
-			       catch error:badarg -> ignore 
+			       try 
+				   NewLines = list_to_integer(wxTextCtrl:getValue(TxtCtrl)),
+				   case NewLines >= 0 of
+				       true ->
+					   change_lines(NewLines),
+					   refresh_grid(Holder, Dir);
+				       false -> 
+					   observer_wx:create_txt_dialog(Panel,
+									 "Invalid input",
+									 "Error",
+									 ?wxICON_ERROR)
+				   end
+			       catch error:badarg -> 
+				       observer_wx:create_txt_dialog(Panel,
+								     "Invalid input",
+								     "Error",
+								     ?wxICON_ERROR)
 			       end,
 			       wxDialog:destroy(Dialog)
 		       end}]),
@@ -454,10 +494,18 @@ handle_info({'DOWN', Ref, _, _, _},
     io:format("Holder died~n"),
     {stop, shutdown, State};
 
-handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid} = State) ->
-    wxListCtrl:setItemCount(Grid, Count),
-    wxListCtrl:refreshItems(Grid, 0, wxListCtrl:getItemCount(Grid)),
-    {noreply, State};
+handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid, 
+						   holder = Holder, 
+						   selected_pids = Pids} = State) ->
+    Pids2 = wx:batch(fun() ->
+			     wxListCtrl:setItemCount(Grid, Count),
+			     clear_all(Grid),
+			     Pids2 = set_selected_items(Grid, Holder, Pids),
+			     wxListCtrl:refreshItems(Grid, 0, Count),
+			     Pids2
+		     end),
+    io:format("New selected pids = ~p~n", [Pids2]),
+    {noreply, State#pro_wx_state{selected_pids = Pids2}};
 
 handle_info(refresh_interval, #pro_wx_state{sort_dir = Dir,
 					    holder = Holder} = State) ->
@@ -489,6 +537,7 @@ handle_info({active, Node}, #pro_wx_state{holder = Holder,
 		false ->
 		    false
 	    end,
+    io:format("noreplying~n"),
     {noreply, State#pro_wx_state{refr_timer = Timer}};
 
 handle_info(not_active, #pro_wx_state{refr_timer = Timer0} = State) ->
@@ -499,12 +548,15 @@ handle_info(not_active, #pro_wx_state{refr_timer = Timer0} = State) ->
 		    timer:cancel(Timer0),
 		    true
 	    end,
-    {noreply, State#pro_wx_state{refr_timer=Timer}};
+    {noreply, State#pro_wx_state{refr_timer=Timer,
+				 selected_pids = [],
+				 last_selected = undefined}};
 
 handle_info({node, Node}, #pro_wx_state{holder = Holder, sort_dir = Dir} = State) ->
     change_node(Node),
     refresh_grid(Holder, Dir),
-    {noreply, State};
+    {noreply, State#pro_wx_state{selected_pids = [],
+				 last_selected = undefined}};
 
 handle_info(Info, State) ->
     io:format("~p, ~p, Handled unexpected info: ~p~n", [?MODULE, ?LINE, Info]),
@@ -569,7 +621,7 @@ handle_event(#wx{id = ?ID_NO_OF_LINES, event = #wxCommand{type = command_menu_se
 			   holder = Holder} = State) ->
     OldLines = integer_to_list(get_lines()),
     line_dialog(Panel, OldLines, Holder, Dir),
-    {noreply, State};   
+    {noreply, State};
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
 	     #pro_wx_state{sort_dir = Dir, holder = Holder} = State) ->
@@ -600,20 +652,19 @@ handle_event(#wx{id = ?ID_REFRESH_INTERVAL},
     end;
 
 handle_event(#wx{id = ?ID_KILL}, #pro_wx_state{popup_menu = Pop,
-					       selected_pid = SelPid} = State) ->
+					       selected_pids = Pids,
+					       last_selected = ToKill} = State) ->
     
     wxWindow:show(Pop, [{show, false}]),
-    case SelPid of
-	undefined -> ignore;
- 	Pid when is_pid(Pid) -> exit(SelPid, kill)
-    end,
-    {noreply, State#pro_wx_state{selected_pid = undefined}};
+    exit(ToKill, kill),
+    Pids2 = lists:delete(ToKill, Pids),
+    {noreply, State#pro_wx_state{selected_pids = Pids2, last_selected = undefined}};
 
 
 handle_event(#wx{id = ?ID_PROC},
 	     #pro_wx_state{panel = Panel,
 			   popup_menu = Pop,
-			   selected_pid = Pid,
+			   last_selected = Pid,
 			   procinfo_menu_pids = Opened} = State) ->
     wxWindow:show(Pop, [{show, false}]),
     Node = get_node(),
@@ -623,20 +674,24 @@ handle_event(#wx{id = ?ID_PROC},
 handle_event(#wx{id = ?ID_TRACEMENU}, 
 	     #pro_wx_state{trace_options = Options,
 			   match_specs = MatchSpecs,
-			   holder = Holder,
-			   grid = Grid,
+			   selected_pids = Pids,
 			   tracemenu_opened = false, 
 			   panel = Panel} = State)  ->
-    Node = get_node(),
-    IndexList = get_selected_items(Grid),
-    PidList = get_selected_pids(Holder, IndexList),
-    observer_trace_wx:start(Node,
-     			    PidList,
-     			    Options,
-			    MatchSpecs,
-     			    Panel,
-     			    self()),
-    {noreply,  State#pro_wx_state{tracemenu_opened = true}};
+    case Pids of
+	[] ->
+	    observer_wx:create_txt_dialog(Panel, "No selected processes", "Tracer", ?wxICON_EXCLAMATION),
+	    {noreply, State};
+	Pids ->
+	    Node = get_node(),
+	    observer_trace_wx:start(Node,
+				    Pids,
+				    Options,
+				    MatchSpecs,
+				    Panel,
+				    self()),
+	    io:format("tracing ~p~n", [Pids]),
+	    {noreply,  State#pro_wx_state{tracemenu_opened = true}}
+    end;
 
 handle_event(#wx{id = ?ID_TRACE_ALL_MENU, event = #wxCommand{type = command_menu_selected}},
 	     #pro_wx_state{trace_options = Options,
@@ -684,20 +739,20 @@ handle_event(#wx{event = #wxList{type = command_list_item_right_click,
 	     #pro_wx_state{popup_menu = Popup,
 			   holder = Holder} = State) ->
     
-    NewPid = case get_row(Holder, Row, pid) of
-		 {error, undefined} ->
-		     wxWindow:show(Popup, [{show, false}]),
-		     undefined;
-		 {ok, P} ->
-		     wxWindow:move(Popup, wx_misc:getMousePosition()),
-		     wxWindow:show(Popup),
-		     P
+    case get_row(Holder, Row, pid) of
+	{error, undefined} ->
+	    wxWindow:show(Popup, [{show, false}]),
+	    undefined;
+	{ok, _} ->
+	    wxWindow:move(Popup, wx_misc:getMousePosition()),
+	    wxWindow:show(Popup)
     end,
-    {noreply, State#pro_wx_state{selected_pid = NewPid}};
+    {noreply, State};
 
 handle_event(#wx{event = #wxList{type = command_list_item_selected,
 				 itemIndex = Row}}, 
-	     #pro_wx_state{popup_menu = Pop,
+	     #pro_wx_state{grid = Grid,
+			   popup_menu = Pop,
 			   holder = Holder} = State) ->
     
     NewPid = case get_row(Holder, Row, pid) of
@@ -707,7 +762,11 @@ handle_event(#wx{event = #wxList{type = command_list_item_selected,
 		     P
 	     end,
     wxWindow:show(Pop, [{show, false}]),
-    {noreply, State#pro_wx_state{selected_pid = NewPid}};
+    Pids = get_selected_pids(Holder, get_selected_items(Grid)),
+    io:format("NewPid: ~p~n", [NewPid]),
+    io:format("Selected pids: ~p~n", [length(Pids)]),
+    {noreply, State#pro_wx_state{selected_pids = Pids,
+				 last_selected = NewPid}};
 
 handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}}, 
 	     #pro_wx_state{sort_dir = OldDir,
@@ -716,19 +775,13 @@ handle_event(#wx{event = #wxList{type = command_list_col_click, col = Col}},
     refresh_grid(Holder, NewDir),
     {noreply, State#pro_wx_state{sort_dir = NewDir}};
 
-handle_event(#wx{event = #wxList{type = command_list_item_activated,
-				 itemIndex = Row}}, 
+handle_event(#wx{event = #wxList{type = command_list_item_activated}}, 
 	     #pro_wx_state{panel = Panel,
-			   holder = Holder,
-			   procinfo_menu_pids= Opened} = State) ->
+			   procinfo_menu_pids= Opened,
+			   last_selected = Pid} = State) when Pid =/= undefined ->
     Node = get_node(),
-    case get_row(Holder, Row, pid) of
-	{error, undefined} ->
-	    {noreply, State};
-	{ok, Pid} when is_pid(Pid) ->
-	    Opened2 = start_procinfo(Node, Pid, Panel, Opened),
-	    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}}
-    end;
+    Opened2 = start_procinfo(Node, Pid, Panel, Opened),
+    {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
 
 handle_event(Event, State) ->
     io:format("~p~p, handle event ~p\n", [?MODULE, ?LINE, Event]),
