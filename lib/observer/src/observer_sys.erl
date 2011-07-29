@@ -90,25 +90,25 @@ no_cpu_online_str(#node_info{no_cpu_online = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
 tot_alloc_str(#node_info{tot_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						% erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 proc_used_str(#node_info{proc_used = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 proc_alloc_str(#node_info{proc_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%   erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 atom_used_str(#node_info{atom_used = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 atom_alloc_str(#node_info{atom_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%   erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 binary_alloc_str(#node_info{binary_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 code_alloc_str(#node_info{code_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+						
 ets_alloc_str(#node_info{ets_alloc = ToReturn}) ->
     erlang:integer_to_list(ToReturn).
-						%    erlang:integer_to_list((ToReturn div 1024) div 1024).
+						

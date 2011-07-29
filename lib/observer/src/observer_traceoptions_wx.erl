@@ -23,9 +23,9 @@
 	  matchspec_popup_dialog,
 	  matchspec_popup_listbox,
 	  matchspec_popup_styled_txtctrl,
-	  match_specs, % [ #match_spec ]
+	  match_specs, % [ #match_spec{} ]
 	  checked_funcs = [],
-	  traced_funcs,  % Key =:= Module::atom, Value =:= [ #traced_func ]
+	  traced_funcs,  % Key =:= Module::atom, Value =:= [ #traced_func{} ]
 	  trace_options}).
 			  
 
@@ -215,7 +215,6 @@ get_modules(Node) ->
 optionpage_top_right(Panel, TopRightSz, Options, Text) ->
     Sizer = wxBoxSizer:new(?wxVERTICAL),
     ChkBox = wxCheckBox:new(Panel, ?wxID_ANY, "Inherit on " ++ Text, []),
-    %% wxCheckBox:set3StateValue(ChkBox, ?wxCHK_CHECKED),
     RadioSz = wxBoxSizer:new(?wxVERTICAL),
     Radio1 = wxRadioButton:new(Panel, ?wxID_ANY, "All " ++ Text, [{style, ?wxRB_GROUP}]),
     Radio2 = wxRadioButton:new(Panel, ?wxID_ANY, "First " ++ Text ++ " only", []),
@@ -386,7 +385,7 @@ apply_matchspec(MatchSpec, TracedDict, {module, Module}) ->
     RecordList = dict:fetch(Module, TracedDict),
     RecordList2 = [X#traced_func{match_spec = MatchSpec} || X <- RecordList],
     {ok, dict:store(Module, RecordList2, TracedDict)};
-apply_matchspec(MatchSpec, TracedDict, {function, Module, TracedFuncRec}) -> %%Module, Function, Arity}) ->
+apply_matchspec(MatchSpec, TracedDict, {function, Module, TracedFuncRec}) ->
     RecordList = dict:fetch(Module, TracedDict),
     NewFunc = TracedFuncRec#traced_func{match_spec = MatchSpec},
     RecordList2 = [NewFunc | [X || X <- RecordList, X =/= TracedFuncRec]],

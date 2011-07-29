@@ -27,7 +27,7 @@
 	  traceoptions_open,
 	  traced_procs,
 	  traced_funcs = dict:new(), % Key =:= Module::atom, Value =:= [ #traced_func  ]
-	  match_specs = []}).%?PREDEFINED_MS}). % [ #match_spec ]
+	  match_specs = []}). % [ #match_spec{} ]
 
 
 start(Node, TracedProcs, TraceOpts, MatchSpecs, ParentFrame, ParentPid) ->

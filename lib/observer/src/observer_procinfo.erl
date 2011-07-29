@@ -257,7 +257,6 @@ get_modinfo_keywords() ->
 get_formatted_values(Node, Process, ItemList) ->
     TagList = [Tag || {Tag, Bool} <- ItemList, Bool =:= true],
     Values = observer_wx:try_rpc(Node, erlang, process_info, [Process, TagList]),
-    %%lists:flatten([io_lib:format("~p~n", [V]) || V <- Values,]).
     lists:flatten(format_value(Values, [])).
 
 format_value([], Acc) ->
