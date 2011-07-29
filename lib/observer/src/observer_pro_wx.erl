@@ -473,6 +473,25 @@ line_dialog(ParentFrame, OldLines, Holder, Dir) ->
     wxDialog:show(Dialog).
 
 
+create_attrs() ->
+    Font = wxSystemSettings:getFont(?wxSYS_DEFAULT_GUI_FONT),
+    Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),
+    #attrs{even = wx:typeCast(wx:null(), wxListItemAttr),
+	   odd  = wxListItemAttr:new(Text, {240,240,255}, Font),
+	   searched = wxListItemAttr:new(Text, {235,215,90}, Font)
+	  }.
+
+dump_to_file(Parent, FileName, Holder) ->
+    case file:open(FileName, [write]) of
+	{ok, Fd} ->
+	    Holder ! {dump, Fd};
+	{error, Reason} ->
+	    FailMsg = file:format_error(Reason),
+	    MD = wxMessageDialog:new(Parent, FailMsg),
+	    wxDialog:showModal(MD),
+	    wxDialog:destroy(MD)
+    end.
+
 start_procinfo(Node, Pid, Frame, Opened) ->
     case lists:member(Pid, Opened) of
 	true ->
@@ -481,6 +500,40 @@ start_procinfo(Node, Pid, Frame, Opened) ->
 	    observer_procinfo:start(Node, Pid, Frame, self()),
 	    [Pid | Opened]
     end.
+
+
+
+get_selected_pids(Holder, Indices) ->
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_pids, self(), Indices},
+    receive
+	{'DOWN', Ref, _, _, _} -> [];
+	{Holder, Res} ->
+	    erlang:demonitor(Ref),
+	    Res
+    end.
+
+get_row(Holder, Row, Column) ->
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_row, self(), Row, Column},
+    receive
+    	{'DOWN', Ref, _, _, _} -> "";
+    	{Holder, Res} ->
+    	    erlang:demonitor(Ref),
+    	    Res
+    end.
+
+
+get_attr(Holder, Item) ->
+    Ref = erlang:monitor(process, Holder),
+    Holder ! {get_attr, self(), Item},
+    receive
+	{'DOWN', Ref, _, _, _} -> "";
+	{Holder, Res} ->
+	    erlang:demonitor(Ref),
+	    Res
+    end.
+
 
 %%%%%%%%%%%%%%%%%%%%%%% Callbacks %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -504,7 +557,6 @@ handle_info({holder_updated, Count}, #pro_wx_state{grid = Grid,
 			     wxListCtrl:refreshItems(Grid, 0, Count),
 			     Pids2
 		     end),
-    io:format("New selected pids = ~p~n", [Pids2]),
     {noreply, State#pro_wx_state{selected_pids = Pids2}};
 
 handle_info(refresh_interval, #pro_wx_state{sort_dir = Dir,
@@ -537,7 +589,6 @@ handle_info({active, Node}, #pro_wx_state{holder = Holder,
 		false ->
 		    false
 	    end,
-    io:format("noreplying~n"),
     {noreply, State#pro_wx_state{refr_timer = Timer}};
 
 handle_info(not_active, #pro_wx_state{refr_timer = Timer0} = State) ->
@@ -592,8 +643,7 @@ handle_event(#wx{id = ?ID_DUMP_TO_FILE},
 	?wxID_OK ->
 	    Path = wxFileDialog:getPath(FD),
 	    wxDialog:destroy(FD),
-	    dump_to_file(Panel, Path, Holder),
-	    io:format("It should Dump to file ~p~n", [Path]);
+	    dump_to_file(Panel, Path, Holder);
 	_ -> 
 	    wxDialog:destroy(FD)
     end,
@@ -672,11 +722,13 @@ handle_event(#wx{id = ?ID_PROC},
     {noreply, State#pro_wx_state{procinfo_menu_pids = Opened2}};
     
 handle_event(#wx{id = ?ID_TRACEMENU}, 
-	     #pro_wx_state{trace_options = Options,
+	     #pro_wx_state{popup_menu = Pop,
+			   trace_options = Options,
 			   match_specs = MatchSpecs,
 			   selected_pids = Pids,
 			   tracemenu_opened = false, 
 			   panel = Panel} = State)  ->
+    wxWindow:show(Pop, [{show, false}]),
     case Pids of
 	[] ->
 	    observer_wx:create_txt_dialog(Panel, "No selected processes", "Tracer", ?wxICON_EXCLAMATION),
@@ -689,7 +741,6 @@ handle_event(#wx{id = ?ID_TRACEMENU},
 				    MatchSpecs,
 				    Panel,
 				    self()),
-	    io:format("tracing ~p~n", [Pids]),
 	    {noreply,  State#pro_wx_state{tracemenu_opened = true}}
     end;
 
@@ -763,8 +814,6 @@ handle_event(#wx{event = #wxList{type = command_list_item_selected,
 	     end,
     wxWindow:show(Pop, [{show, false}]),
     Pids = get_selected_pids(Holder, get_selected_items(Grid)),
-    io:format("NewPid: ~p~n", [NewPid]),
-    io:format("Selected pids: ~p~n", [length(Pids)]),
     {noreply, State#pro_wx_state{selected_pids = Pids,
 				 last_selected = NewPid}};
 
@@ -809,36 +858,10 @@ handle_event(Event, State) ->
 
 
 
-get_selected_pids(Holder, Indices) ->
-    Ref = erlang:monitor(process, Holder),
-    Holder ! {get_pids, self(), Indices},
-    receive
-	{'DOWN', Ref, _, _, _} -> [];
-	{Holder, Res} ->
-	    erlang:demonitor(Ref),
-	    Res
-    end.
-
-get_row(Holder, Row, Column) ->
-    Ref = erlang:monitor(process, Holder),
-    Holder ! {get_row, self(), Row, Column},
-    receive
-    	{'DOWN', Ref, _, _, _} -> "";
-    	{Holder, Res} ->
-    	    erlang:demonitor(Ref),
-    	    Res
-    end.
 
 
-get_attr(Holder, Item) ->
-    Ref = erlang:monitor(process, Holder),
-    Holder ! {get_attr, self(), Item},
-    receive
-	{'DOWN', Ref, _, _, _} -> "";
-	{Holder, Res} ->
-	    erlang:demonitor(Ref),
-	    Res
-    end.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%TABLE HOLDER%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 init_table_holder(Parent, Info, Attrs) ->
     table_holder(#holder{parent = Parent,
@@ -919,22 +942,3 @@ get_attr(From, Row, Attrs) ->
 			Attrs#attrs.odd
 		end,
     From ! {self(), Attribute}.
-
-create_attrs() ->
-    Font = wxSystemSettings:getFont(?wxSYS_DEFAULT_GUI_FONT),
-    Text = wxSystemSettings:getColour(?wxSYS_COLOUR_LISTBOXTEXT),
-    #attrs{even = wx:typeCast(wx:null(), wxListItemAttr),
-	   odd  = wxListItemAttr:new(Text, {240,240,255}, Font),
-	   searched = wxListItemAttr:new(Text, {235,215,90}, Font)
-	  }.
-
-dump_to_file(Parent, FileName, Holder) ->
-    case file:open(FileName, [write]) of
-	{ok, Fd} ->
-	    Holder ! {dump, Fd};
-	{error, Reason} ->
-	    FailMsg = file:format_error(Reason),
-	    MD = wxMessageDialog:new(Parent, FailMsg),
-	    wxDialog:showModal(MD),
-	    wxDialog:destroy(MD)
-    end.

@@ -216,7 +216,6 @@ handle_event(#wx{id = Id, event = #wxCommand{type = command_menu_selected}}, Sta
   when Id > ?FIRST_NODES_MENU_ID, Id < ?LAST_NODES_MENU_ID ->
     
     Node = lists:nth(Id - ?FIRST_NODES_MENU_ID, State#state.nodes),
-    io:format("~p:~p, Klickade på nod ~p~n", [?MODULE, ?LINE, Node]),
     UpdState = change_node_view(Node, State),
     {noreply, UpdState};
 

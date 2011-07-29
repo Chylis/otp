@@ -277,7 +277,6 @@ handle_cast(Msg, State) ->
 
 handle_event(#wx{id = ?ID_REFRESH, event = #wxCommand{type = command_menu_selected}}, 
 	     #sys_wx_state{node = Node, panel = Panel} = State) ->
-    io:format("~p:~p, Klickade på refresh~n", [?MODULE, ?LINE]),
     try
 	update_syspage(State)
     catch error:{badrpc, _} ->

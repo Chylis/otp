@@ -429,8 +429,7 @@ read_settings(Filename, #state{frame = Frame} = State) ->
 	{ok, Terms} ->
 	    {TraceOpts, MatchSpecs} = parse_settings(Terms, {#trace_options{}, []}),
 	    State#state{trace_options = TraceOpts, match_specs = MatchSpecs};
-	{error, Reason} ->
-	    io:format("~p~n", [Reason]),
+	{error, _} ->
 	    observer_wx:create_txt_dialog(Frame, "Could not load settings", "Error", ?wxICON_ERROR),
 	    State
     end.
